@@ -13,7 +13,39 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | M1 | C++ 호가·재동기화·주문 검증·매칭 엔진 + Node 모의 거래소 서버 | 완료 |
 | M2 | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | 완료 |
 | M3 | 로그인 · 주문 · 체결 알림 · 보안 저장소 · 기기 보안 신호 | 완료 |
-| **M4** | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | **완료** |
+| M4 | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | 완료 |
+| **M5** | 웹 화면(HTML/JS·AngularJS) + 웹뷰 브리지 · AngularJS 관리 콘솔 · 분석 이벤트 분류표 · ko/en/id/th 현지화 | **완료** |
+
+### M5 검증 결과 (2026-11-15)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| 서버 | 웹 화면 CSP(인라인 스크립트·eval 없음, GTM 설정 시에만 GTM 허용) · AngularJS는 min 파일만 공개 · 번역 버전/ETag 304 · 종목정보·공지(언어별, 없으면 ko) · 관리 API(토큰, 입력 검증, 주문 지연이 실제 응답에 반영, 변동성, 전체 연결 끊기 1012) (vitest 41개, 이번에 +11) | 통과 |
+| 앱 | 브리지 거절 규칙 12종(출처·유사 호스트·버전·형식·크기 등) · 앱→웹 스크립트 주입 방지 · 속도 제한 · 번역 키/자리표시자 일치 · 서버 번역 덮어쓰기/304/실패 시 내장본 · 분류표 검사(웹 JS가 보내는 이벤트까지) · 화면 흐름 2개(웹 → 네이티브 주문 창, 인도네시아어 전환 시 `71.300`) (Jest 35개, 이번에 +26), `tsc` · ESLint | 통과 |
+| iOS | 정보 탭 웹뷰(브리지 연결 → "앱에서 실시간 반영"), 웹 매수 → 네이티브 주문 창, 설정의 분석 이벤트 목록(🌐 = 웹에서 온 이벤트), 태국어 전환, 공지(AngularJS) 태국어·불기 연도 | [정보](docs/m5-ios-stock-info-web.png) · [웹→주문](docs/m5-ios-order-from-web.png) · [설정·분석](docs/m5-ios-settings-analytics.png) · [태국어](docs/m5-ios-watchlist-th.png) · [공지](docs/m5-ios-notices-th.png) |
+| Android | 정보 탭 웹뷰 + 브리지, 웹 매도 → 네이티브 주문 창 | [정보](docs/m5-android-stock-info-web.png) · [웹→주문](docs/m5-android-order-from-web.png) |
+| 관리 콘솔 | 브라우저에서 토큰 입력 → 실시간 지표·장애 주입. "연결 끊기" 후 앱이 스스로 재접속(Android 화면 `재연결 1`, 상태 `실시간`) | [콘솔](docs/m5-admin-console.jpg) |
+
+### M5 설계 — 웹은 정보, 주문은 네이티브
+
+```
+                 서버(Fastify)                                   앱(RN)
+  /web/stock/    순수 HTML·CSS·JS ─┐                      ┌─ HogaWebView (허용 출처만, 새 창·파일 접근 끔)
+  /web/notices/  AngularJS 1.8    ─┼─ CSP: script-src 'self'│     │ 받은 메시지 검사: 크기 → 출처 → 속도 → 형식·버전
+  /admin/        AngularJS 콘솔    ─┘                      │     ▼
+  /i18n/:lang    shared/i18n (앱과 같은 파일)              │  hello → init(언어·테마) / unsupported
+  /shared/analytics/events.json                            │  openOrder → 네이티브 주문 창(사용자가 직접 확인)
+                                                           │  track → 분류표로 걸러 source=web
+                    ◀── injectJavaScript(quote·locale) ────┘
+```
+
+- **웹은 주문을 직접 내지 못합니다.** `openOrder`는 앱의 주문 창을 여는 것뿐이고, 같은 종목일 때만 열리며 "웹에서 연 주문" 안내가 붙습니다. 가격·수량 검사는 기존 C++ 규칙 그대로입니다.
+- **웹 메시지는 신뢰하지 않습니다.** 4KB 제한, 보낸 페이지 출처 확인(`http://localhost:8080.evil.example` 같은 유사 주소 포함), 초당 20개 제한, 타입별 필드 검사. 거절하면 `bridge_rejected` 이벤트로 남깁니다. 다른 주소로의 이동은 막고 외부 브라우저로도 넘기지 않습니다(피싱 경로 차단).
+- **프로토콜 버전 협상**: 웹이 더 새 버전이면 앱이 `unsupported`로 답하고 웹 화면이 "앱 업데이트 필요"를 보여 줍니다. 웹은 앱보다 먼저 배포되기 때문입니다.
+- **웹 화면은 앱 배포 없이 바뀝니다.** HTML은 `no-cache`, 번역은 서버 파일을 고치면 다음 요청부터 새 버전(ETag)이 나가고, 앱은 시작·언어 변경 때 받아 덮어씁니다(실패하면 내장 번역).
+- **AngularJS는 `ng-csp` 모드**로 eval 없이 돌려 CSP를 지킵니다. 공지는 controller-as·서비스·필터·해시 라우팅(뒤로 가기), 관리 콘솔은 `$http` 인터셉터로 토큰을 붙이고 401이면 지웁니다.
+- **분석은 분류표 한 벌**(`shared/analytics/events.json`, [문서](docs/analytics-taxonomy.md)). 웹뷰 안의 웹 이벤트는 앱 한 파이프라인으로만 보내 이중 집계를 막고, 일반 브라우저에서는 dataLayer → GTM(설정 시)으로 갑니다. Firebase·GA4·GTM 계정은 없어서 실제 전송은 하지 않고, 설정 화면의 디버그 목록으로 확인합니다.
+- **현지화**: 번역 144개 키 × 4개 언어를 앱과 웹이 같이 씁니다. 숫자는 `Intl.NumberFormat`(인도네시아어 `71.200`), 날짜도 언어를 따릅니다(태국어는 불기 2569). 태국어는 성조 기호 때문에 줄 높이를 늘리고, 차트 안내 줄은 높이를 고정하지 않게 바꿨습니다. 세션 안내 문구는 번역 키로 저장해 언어를 바꾸면 따라 바뀝니다.
 
 ### M4 검증 결과 (2026-11-15)
 
@@ -174,6 +206,7 @@ hoga/
 │     └─ android/ChartBridge.cpp  # JNI: Kotlin 차트 뷰 → chart::layout
 ├─ bindings/platform-modules/ios/ # Objective-C TurboModule: Keychain 보안 저장소 · 기기 보안 신호
 │                                 # HogaChartComponentView.mm: Fabric 차트 (CoreGraphics)
+├─ shared/                        # 앱·웹 공용: i18n/(ko·en·id·th) · analytics/events.json
 ├─ server/                        # Node.js 모의 거래소 (TypeScript, Fastify, ws)
 │  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기
 │  ├─ src/gateway/                # WebSocket 팬아웃 (백프레셔·하트비트·제한)
@@ -181,11 +214,18 @@ hoga/
 │  ├─ src/auth/                   # HS256 JWT · 사용자 · 리프레시 회전
 │  ├─ src/orders/tracker.ts       # 사용자 주문 상태 · 체결 알림
 │  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현, Redis는 M6)
+│  ├─ src/api/web.ts              # 웹 화면 정적 제공 · CSP · 번역 · 종목정보 · 공지
+│  ├─ src/api/admin.ts            # 관리 API(장애 주입 · 변동성 · 연결 끊기)
+│  ├─ web/                        # 종목정보(HTML/CSS/JS) · 공지(AngularJS) · 공용 브리지·번역·분석 JS
+│  ├─ admin/                      # AngularJS 관리 콘솔
 │  └─ test/
 ├─ apps/mobile/                   # React Native 0.88 앱
 │  ├─ specs/                      # 코드젠 스펙 (TurboModule · HogaChartView)
 │  ├─ src/screens/                # 관심종목 · 실시간 호가 · 차트 탭
 │  ├─ src/components/ChartPanel.tsx
+│  ├─ src/web/                    # 웹뷰 브리지(검사 규칙) · HogaWebView
+│  ├─ src/i18n/                   # 번역 · 숫자 형식 · 서버 번역 갱신
+│  ├─ src/analytics/              # 분류표 기반 이벤트 · 싱크
 │  ├─ src/hooks/                  # usePolled: C++에서 화면 주기로 끌어오기
 │  ├─ src/orders/                 # 주문 상태 머신 · 미확정 주문 기록 · 내 주문
 │  ├─ src/auth/session.ts         # 로그인 · 토큰 회전 · 생체 잠금
@@ -222,6 +262,11 @@ npm test
 | `GET /symbols` | 모의 종목 목록 (기준가, 호가단위, 상·하한가) |
 | `GET /book/:symbol?depth=20` | 스냅샷 (재동기화용) |
 | `GET /candles/:symbol?interval=1m&limit=600` | 과거 봉 `[[start, o, h, l, c, v]]` (1m · 5m · 15m) |
+| `GET /symbols/:symbol/info?lang=` | 종목정보 화면용 요약(상·하한가, 오늘 시고저·거래량, 시가총액, 언어별 개요) |
+| `GET /notices?lang=&category=`, `/notices/:id` | 공지(고정 먼저, 언어 없으면 ko) |
+| `GET /i18n/:lang` | 번역(앱·웹 공용). `ETag`/`If-None-Match` |
+| `/web/stock/?symbol=&lang=`, `/web/notices/` | 웹 화면 (CSP, HTML no-cache) |
+| `/admin/` · `/admin/api/*` | 관리 콘솔 · API(`x-admin-token`, 기본값 `ADMIN_TOKEN`) |
 | `POST /auth/login`, `/auth/refresh`, `/auth/logout` | 로그인 · 토큰 회전 · 로그아웃 |
 | `GET /orders?symbol=` | 내 주문 목록 (Bearer 토큰 필요, 아래 주문 API 모두 동일) |
 | `POST /orders` | 주문. `Idempotency-Key` 헤더 필수(사용자별로 분리) |
@@ -275,7 +320,7 @@ cmake -S core -B core/build -G Ninja && cmake --build core/build && ctest --test
 # 2) Node 애드온
 cd bindings/node && npm install && npx cmake-js compile -G Ninja && npm test
 
-# 3) 서버
+# 3) 서버 (관리 콘솔: http://localhost:8080/admin/ , 토큰은 ADMIN_TOKEN 환경 변수)
 cd server && npm install && npm test && npm start
 
 # 4) 앱 (서버가 8080에서 떠 있어야 시세가 보인다)
@@ -332,4 +377,10 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 차트: 서버의 과거 봉은 시작할 때 만든 모의 데이터이고 서버 메모리에만 있습니다. 앱은 연결할 때 600봉만 받습니다(더 과거로 스크롤해도 추가로 받지 않음).
 - 차트: Android 핀치 확대는 코드로 넣었지만 adb로는 두 손가락 입력을 만들 수 없어 **에뮬레이터에서 확인하지 못했습니다**(iOS에서는 확인). 차트 접근성(VoiceOver·TalkBack 요약)은 아직 없습니다.
 - 차트: 체결이 없는 분에는 봉이 생기지 않습니다(빈 봉 채우기 없음).
-- 다음: **M5** — 웹뷰(종목정보 HTML·공지 AngularJS) + 브리지, AngularJS 관리 콘솔, 분석 이벤트 분류표, 현지화.
+- 웹·분석: Firebase·GA4·GTM 계정이 없어 실제 전송은 **확인하지 못했습니다**(디버그 싱크와 dataLayer까지만). GTM 컨테이너 안의 태그 설정도 없습니다.
+- 웹·분석: 웹 화면에 앱의 로그인 정보를 넘기지 않습니다. 로그인이 필요한 웹 화면을 만들려면 짧은 수명의 일회용 토큰 교환을 따로 설계해야 합니다.
+- 관리 콘솔은 토큰 하나로만 보호합니다. 운영이라면 내부망·SSO·감사 로그가 필요합니다(지금은 변경을 서버 로그에 경고로만 남김).
+- 현지화: 종목 이름은 번역하지 않습니다. 오른쪽에서 왼쪽으로 쓰는 언어(ar)는 아직 대상이 아닙니다. 번역 검수는 원어민 확인을 거치지 않았습니다.
+- 현지화: 가격은 원화·한국 호가단위 그대로이고 자릿수 구분만 언어를 따릅니다. 시장별 호가 정책(루피아·바트)은 C++ 인터페이스로 분리하지 않았습니다.
+- Android 하드웨어 뒤로 가기(`BackHandler`)를 처리하지 않습니다. 화면 안의 ‹ 버튼으로만 이동하고, 웹뷰 안 기록(공지 상세 → 목록)도 웹 화면의 ‹ 버튼으로 돌아갑니다.
+- 다음: **M6** — Jenkins 병렬 파이프라인, Appium 두 플랫폼 E2E, k6 부하·카오스(관리 콘솔 활용), "JS 경유 vs C++ 직접" 비교 실험.

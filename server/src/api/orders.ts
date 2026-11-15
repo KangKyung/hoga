@@ -16,8 +16,8 @@ export interface OrderRouteDeps {
   tracker: OrderTracker;
   auth: AuthService;
   metrics: Metrics;
-  /** 장애 주입: 처리 후 응답만 늦춘다 */
-  responseDelayMs: number;
+  /** 장애 주입: 처리 후 응답만 늦춘다(관리 콘솔에서 바꿀 수 있어 매번 읽는다) */
+  responseDelayMs: () => number;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -99,7 +99,8 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       }
       metrics.inc('hoga_orders_total', { status: record.status });
 
-      if (deps.responseDelayMs > 0) await sleep(deps.responseDelayMs);
+      const delay = deps.responseDelayMs();
+      if (delay > 0) await sleep(delay);
       return reply.send(record);
     });
 

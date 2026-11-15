@@ -1,0 +1,168 @@
+.page {
+  padding-bottom: 96px; /* 아래 고정 버튼 자리 */
+}
+
+.name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.name-row h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.price {
+  font-size: 30px;
+  font-weight: 800;
+}
+
+.live {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.live::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--mute);
+  vertical-align: middle;
+}
+
+.live.on::before {
+  background: var(--live);
+}
+
+.notice {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.spark {
+  width: 100%;
+  height: 80px;
+  display: block;
+}
+
+.spark .line {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.spark .line.up {
+  stroke: var(--up);
+}
+
+.spark .line.down {
+  stroke: var(--down);
+}
+
+.spark .line.flat {
+  stroke: var(--flat);
+}
+
+.spark .base {
+  stroke: var(--line);
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.grid div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 0;
+}
+
+.grid .wide {
+  grid-column: 1 / -1;
+}
+
+.grid dt {
+  color: var(--mute);
+  font-size: 13px;
+}
+
+.grid dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.profile {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--sub);
+}
+
+.link {
+  text-align: center;
+  padding: 8px;
+  font-weight: 600;
+}
+
+.actions {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+
+.action {
+  flex: 1;
+  border: 0;
+  border-radius: 10px;
+  padding: 14px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.action.buy {
+  background: var(--up);
+}
+
+.action.sell {
+  background: var(--down);
+}
+
+.action:disabled {
+  opacity: 0.4;
+}
+
+@media (max-width: 340px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

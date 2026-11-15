@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Stock info</title>
+    <link rel="stylesheet" href="/web/shared/base.css" />
+    <link rel="stylesheet" href="/web/stock/stock.css" />
+    <script src="/web-config.js"></script>
+    <script src="/web/shared/bridge.js"></script>
+    <script src="/web/shared/i18n.js"></script>
+    <script src="/web/shared/analytics.js"></script>
+    <script src="/web/stock/stock.js" defer></script>
+  </head>
+  <body>
+    <main class="page" id="root" aria-busy="true">
+      <section class="card hero">
+        <div class="name-row">
+          <h1 id="name">—</h1>
+          <span id="code" class="mute"></span>
+        </div>
+        <div class="price-row">
+          <span id="price" class="price mono">—</span>
+          <span id="change" class="mono"></span>
+        </div>
+        <p id="liveLabel" class="live mute"></p>
+      </section>
+
+      <p id="updateNotice" class="notice hidden" role="status"></p>
+
+      <section class="card">
+        <h2 data-i18n="web.stock.intraday"></h2>
+        <svg id="spark" class="spark" viewBox="0 0 300 80" preserveAspectRatio="none" role="img"></svg>
+      </section>
+
+      <section class="card">
+        <dl class="grid mono">
+          <div><dt data-i18n="web.stock.open"></dt><dd id="open">—</dd></div>
+          <div><dt data-i18n="web.stock.high"></dt><dd id="high" class="up">—</dd></div>
+          <div><dt data-i18n="web.stock.low"></dt><dd id="low" class="down">—</dd></div>
+          <div><dt data-i18n="web.stock.volume"></dt><dd id="volume">—</dd></div>
+          <div><dt data-i18n="web.stock.base"></dt><dd id="base">—</dd></div>
+          <div><dt data-i18n="web.stock.tick"></dt><dd id="tick">—</dd></div>
+          <div><dt data-i18n="web.stock.upper"></dt><dd id="upper" class="up">—</dd></div>
+          <div><dt data-i18n="web.stock.lower"></dt><dd id="lower" class="down">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="web.stock.profile"></h2>
+        <p id="profile" class="profile"></p>
+        <dl class="grid mono">
+          <div><dt data-i18n="web.stock.sector"></dt><dd id="sector">—</dd></div>
+          <div><dt data-i18n="web.stock.shares"></dt><dd id="shares">—</dd></div>
+          <div class="wide"><dt data-i18n="web.stock.marketCap"></dt><dd id="marketCap">—</dd></div>
+        </dl>
+      </section>
+
+      <a id="noticesLink" class="link" href="/web/notices/" data-i18n="web.stock.notices"></a>
+      <p class="footnote" data-i18n="web.stock.footnote"></p>
+
+      <div class="actions">
+        <button id="sell" class="action sell" type="button" data-i18n="common.sell"></button>
+        <button id="buy" class="action buy" type="button" data-i18n="common.buy"></button>
+      </div>
+    </main>
+  </body>
+</html>

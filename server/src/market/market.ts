@@ -29,6 +29,15 @@ interface SymbolState {
   seq: number;
   botOrders: number[];
   candles: InstanceType<typeof CandleSeries>;
+  /** 모의 주문 발생기의 가격 폭 배수(관리 콘솔에서 조절). 1 = 기본 */
+  volatility: number;
+}
+
+export interface DayStats {
+  open: number;
+  high: number;
+  low: number;
+  volume: number;
 }
 
 const MINUTE = 60_000;
@@ -47,7 +56,9 @@ export type ExecutionListener = (symbol: string, result: ExecutionResult) => voi
 export class Market {
   private readonly states = new Map<string, SymbolState>();
   private readonly listeners = new Set<ExecutionListener>();
-  private readonly dropSeqRate: number;
+  private dropSeqRate: number;
+  private simIntervalMs = 0;
+  private stopSim: () => void = () => {};
   private readonly random: () => number;
   private readonly now: () => number;
 
@@ -66,6 +77,7 @@ export class Market {
         seq: 0,
         botOrders: [],
         candles: new CandleSeries({ intervalMs: MINUTE, maxBars: 2_000 }),
+        volatility: 1,
       };
       this.backfill(state, options.historyMinutes ?? 0);
       this.states.set(info.code, state);
@@ -106,6 +118,41 @@ export class Market {
     };
   }
 
+  /** 오늘(서버 시각 자정 이후) 시가·고가·저가·거래량. 봉이 없으면 undefined */
+  dayStats(symbol: string): DayStats | undefined {
+    const bars = this.require(symbol).candles.bars(2_000, 0);
+    const midnight = new Date(this.now());
+    midnight.setHours(0, 0, 0, 0);
+    const today = bars.filter(([start]) => start >= midnight.getTime());
+    if (today.length === 0) return undefined;
+    return {
+      open: today[0]![1],
+      high: Math.max(...today.map((b) => b[2])),
+      low: Math.min(...today.map((b) => b[3])),
+      volume: today.reduce((sum, b) => sum + b[5], 0),
+    };
+  }
+
+  // ---- 관리 콘솔(장애·부하 시연)용 제어 ----
+
+  get faults() {
+    return { dropSeqRate: this.dropSeqRate, simIntervalMs: this.simIntervalMs };
+  }
+
+  setDropSeqRate(rate: number): void {
+    this.dropSeqRate = Math.min(1, Math.max(0, rate));
+  }
+
+  volatility(symbol: string): number {
+    return this.require(symbol).volatility;
+  }
+
+  /** symbol이 없으면 전 종목. 배수는 0.2~10 */
+  setVolatility(multiplier: number, symbol?: string): void {
+    const value = Math.min(10, Math.max(0.2, multiplier));
+    for (const state of symbol ? [this.require(symbol)] : this.states.values()) state.volatility = value;
+  }
+
   /** 1분 봉(오래된 것부터). bucketMs가 1분의 배수면 묶어서 */
   candles(symbol: string, limit: number, bucketMs = 0): CandleRow[] {
     return this.require(symbol).candles.bars(limit, bucketMs);
@@ -129,12 +176,26 @@ export class Market {
 
   /** 모의 주문 발생기. 종목마다 intervalMs 주기로 호가를 만들고 가끔 체결시킨다. */
   startSimulator(intervalMs: number): () => void {
-    if (intervalMs <= 0) return () => {};
+    this.stopSim();
+    this.simIntervalMs = Math.max(0, intervalMs);
+    if (this.simIntervalMs <= 0) {
+      this.stopSim = () => {};
+      return () => {};
+    }
     const timer = setInterval(() => {
       for (const state of this.states.values()) this.simulateOnce(state);
-    }, intervalMs);
+    }, this.simIntervalMs);
     timer.unref();
-    return () => clearInterval(timer);
+    const stop = () => clearInterval(timer);
+    this.stopSim = stop;
+    return () => {
+      // 다시 시작해 바뀐 타이머가 아니라면 멈춘다
+      if (this.stopSim === stop) {
+        stop();
+        this.stopSim = () => {};
+        this.simIntervalMs = 0;
+      }
+    };
   }
 
   /** 테스트·워밍업용: 각 종목에 n번 모의 주문 */
@@ -246,8 +307,8 @@ export class Market {
       if (!opposite) return;
       price = opposite.price;
     } else {
-      // 기준가 주변 1~5틱에 대기 호가
-      const ticks = 1 + Math.floor(this.random() * 5);
+      // 기준가 주변 1~5틱(× 변동성 배수)에 대기 호가
+      const ticks = 1 + Math.floor(this.random() * 5 * state.volatility);
       const tick = tickSize(ref);
       price =
         side === 'bid'

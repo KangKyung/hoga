@@ -1,0 +1,73 @@
+<!doctype html>
+<!-- ng-csp: AngularJS가 new Function·인라인 스타일을 쓰지 않게 해 Content-Security-Policy를 지킨다 -->
+<html lang="ko" ng-app="hogaNotices" ng-csp>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Notices</title>
+    <link rel="stylesheet" href="/vendor/angular/angular-csp.css" />
+    <link rel="stylesheet" href="/web/shared/base.css" />
+    <link rel="stylesheet" href="/web/notices/notices.css" />
+    <script src="/web-config.js"></script>
+    <script src="/web/shared/bridge.js"></script>
+    <script src="/web/shared/i18n.js"></script>
+    <script src="/web/shared/analytics.js"></script>
+    <script src="/vendor/angular/angular.min.js"></script>
+    <script src="/web/notices/notices.js"></script>
+  </head>
+  <body ng-controller="NoticesController as vm" ng-cloak>
+    <main class="page">
+      <header class="head">
+        <button type="button" class="back" ng-if="vm.detail" ng-click="vm.close()">{{ 'web.notices.back' | t }}</button>
+        <h1>{{ vm.detail ? vm.detail.title : ('web.notices.title' | t) }}</h1>
+      </header>
+
+      <!-- 목록 -->
+      <section ng-if="!vm.detail">
+        <div class="chips" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            class="chip"
+            ng-repeat="c in vm.categories track by c"
+            ng-class="{ active: vm.category === c }"
+            aria-selected="{{ vm.category === c }}"
+            ng-click="vm.select(c)">
+            {{ (c === 'all' ? 'web.notices.all' : 'web.notices.category.' + c) | t }}
+          </button>
+        </div>
+        <input
+          class="search"
+          type="search"
+          ng-model="vm.query"
+          ng-model-options="{ debounce: 200 }"
+          placeholder="{{ 'web.notices.search' | t }}" />
+
+        <ul class="list">
+          <li ng-repeat="n in vm.notices | filter:{ title: vm.query } track by n.id">
+            <button type="button" class="item" ng-click="vm.open(n.id)">
+              <span class="badge" ng-class="n.category">{{ 'web.notices.category.' + n.category | t }}</span>
+              <span class="pin" ng-if="n.pinned" aria-hidden="true">📌</span>
+              <span class="title">{{ n.title }}</span>
+              <time class="date mute">{{ n.date | localDate }}</time>
+            </button>
+          </li>
+        </ul>
+        <p class="empty mute" ng-if="vm.loaded && (vm.notices | filter:{ title: vm.query }).length === 0">
+          {{ 'web.notices.empty' | t }}
+        </p>
+      </section>
+
+      <!-- 상세 -->
+      <article class="card detail" ng-if="vm.detail">
+        <p class="meta">
+          <span class="badge" ng-class="vm.detail.category">{{ 'web.notices.category.' + vm.detail.category | t }}</span>
+          <time class="mute">{{ vm.detail.date | localDate }}</time>
+        </p>
+        <p class="body">{{ vm.detail.body }}</p>
+      </article>
+
+      <p class="footnote">{{ 'web.stock.footnote' | t }}</p>
+    </main>
+  </body>
+</html>

@@ -1,3 +1,5 @@
+import {formatNumber} from './i18n';
+
 /** 국내 관례: 상승 빨강, 하락 파랑, 보합 회색 */
 export const colors = {
   bg: '#f3f5f7',
@@ -23,13 +25,18 @@ export function priceColor(price: number, base: number): string {
   return colors.flat;
 }
 
-export const formatPrice = (n: number) => n.toLocaleString('ko-KR');
+/** 가격·수량. 단위는 원·주 그대로, 자릿수 구분만 언어를 따른다(id: 71.200) */
+export const formatPrice = (n: number) => formatNumber(n);
 
 export function formatChange(price: number, base: number): string {
   const diff = price - base;
   const pct = base ? (diff / base) * 100 : 0;
   const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '';
-  return `${arrow}${formatPrice(Math.abs(diff))} (${diff >= 0 ? '+' : '-'}${Math.abs(pct).toFixed(2)}%)`;
+  const pctText = formatNumber(Math.abs(pct), {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${arrow}${formatPrice(Math.abs(diff))} (${diff >= 0 ? '+' : '-'}${pctText}%)`;
 }
 
 export const mono = {fontVariant: ['tabular-nums' as const]};

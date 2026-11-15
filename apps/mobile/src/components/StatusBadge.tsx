@@ -2,6 +2,7 @@ import React from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 
 import type {ConnectionState, SyncState} from '../native/hogaCore';
+import {useI18n} from '../i18n';
 import {colors} from '../theme';
 
 interface Props {
@@ -12,7 +13,9 @@ interface Props {
 
 /** 데이터를 믿을 수 있는 상태인지 숨기지 않고 보여 준다. */
 export function StatusBadge({connection, sync, stale}: Props) {
-  const {label, color} = describe(connection, sync, stale);
+  const {t} = useI18n();
+  const {key, color} = describe(connection, sync, stale);
+  const label = t(key);
   return (
     <View testID="statusBadge" style={[styles.badge, {borderColor: color}]}>
       <View style={[styles.dot, {backgroundColor: color}]} />
@@ -22,12 +25,12 @@ export function StatusBadge({connection, sync, stale}: Props) {
 }
 
 function describe(connection: ConnectionState, sync?: SyncState, stale?: boolean) {
-  if (connection === 'reconnecting') return {label: '재연결 중', color: colors.danger};
-  if (connection !== 'open') return {label: '연결 중', color: colors.warn};
-  if (sync === 'resyncing') return {label: '동기화 중', color: colors.warn};
-  if (sync === 'waiting') return {label: '불러오는 중', color: colors.warn};
-  if (stale) return {label: '지연', color: colors.warn};
-  return {label: '실시간', color: colors.live};
+  if (connection === 'reconnecting') return {key: 'status.reconnecting', color: colors.danger} as const;
+  if (connection !== 'open') return {key: 'status.connecting', color: colors.warn} as const;
+  if (sync === 'resyncing') return {key: 'status.resyncing', color: colors.warn} as const;
+  if (sync === 'waiting') return {key: 'status.loading', color: colors.warn} as const;
+  if (stale) return {key: 'status.stale', color: colors.warn} as const;
+  return {key: 'status.live', color: colors.live} as const;
 }
 
 const styles = StyleSheet.create({

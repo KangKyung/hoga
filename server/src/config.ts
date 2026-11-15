@@ -35,6 +35,15 @@ const schema = z.object({
   REFRESH_TOKEN_TTL_SEC: z.coerce.number().int().min(60).default(7 * 24 * 60 * 60),
   LOGIN_MAX_FAILURES_PER_MIN: z.coerce.number().int().min(1).default(5),
 
+  // ---- 웹 화면 · 관리 콘솔 ----
+  /** 관리 콘솔 API 토큰(x-admin-token). 운영에서는 반드시 바꾸고, 관리 경로는 내부망에서만 연다 */
+  ADMIN_TOKEN: z.string().min(12).default('hoga-admin-dev-token'),
+  /** 웹 화면에 심을 GTM 컨테이너 ID(예: GTM-ABC1234). 없으면 GTM을 불러오지 않고 dataLayer에만 쌓는다 */
+  GTM_CONTAINER_ID: z
+    .string()
+    .regex(/^GTM-[A-Z0-9]{4,12}$/)
+    .optional(),
+
   /** 사용 예정: Redis 연결(M6). 지금은 메모리 구현만 사용 */
   REDIS_URL: z.string().optional(),
 });

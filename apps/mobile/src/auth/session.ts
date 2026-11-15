@@ -1,6 +1,8 @@
 import {useSyncExternalStore} from 'react';
 
 import {HttpError, request, setTokenSource} from '../api/http';
+import {track} from '../analytics/analytics';
+import {t, type MessageKey} from '../i18n';
 import {hogaCore} from '../native/hogaCore';
 import {secureStore, secureStoreErrorCode} from '../native/security';
 
@@ -14,10 +16,11 @@ export interface User {
   name: string;
 }
 
+/** message는 번역 키. 화면이 그릴 때 현재 언어로 바꾼다(언어를 바꿔도 안내가 따라 바뀌게) */
 export type SessionState =
   | {status: 'loading'}
-  | {status: 'signedOut'; message?: string}
-  | {status: 'locked'; message?: string}
+  | {status: 'signedOut'; message?: MessageKey}
+  | {status: 'locked'; message?: MessageKey}
   | {status: 'signedIn'; user: User};
 
 interface TokenResponse {
@@ -71,7 +74,7 @@ class SessionManager {
   /** 생체 인증으로 잠금 해제 */
   async unlock() {
     try {
-      const lock = await secureStore.get(LOCK_KEY, '잠금을 해제하려면 인증하세요');
+      const lock = await secureStore.get(LOCK_KEY, t('session.unlockPrompt'));
       if (!lock) throw new Error('missing lock');
       await this.resume();
     } catch (e) {
@@ -80,33 +83,40 @@ class SessionManager {
         this.set({status: 'locked'});
       } else if (code === 'E_INVALIDATED') {
         await this.clear();
-        this.set({status: 'signedOut', message: '생체 정보가 바뀌어 다시 로그인해 주세요.'});
+        this.set({status: 'signedOut', message: 'session.biometryChanged'});
       } else {
-        this.set({status: 'locked', message: '인증하지 못했습니다. 다시 시도해 주세요.'});
+        this.set({status: 'locked', message: 'session.unlockFailed'});
       }
     }
   }
 
   async login(username: string, password: string, enableLock: boolean) {
     try {
-      const {data} = await request<TokenResponse>('/auth/login', {method: 'POST', body: {username, password}});
+      const {data} = await request<TokenResponse>('/auth/login', {
+        method: 'POST',
+        body: {username, password},
+      });
       await this.accept(data);
+      track('login', {method: 'password', lock_enabled: enableLock});
       if (enableLock) {
-        await secureStore.set(LOCK_KEY, hogaCore.randomId(), {biometric: true, prompt: '생체 잠금을 켭니다'});
+        await secureStore.set(LOCK_KEY, hogaCore.randomId(), {
+          biometric: true,
+          prompt: t('session.enableLockPrompt'),
+        });
         await secureStore.set(LOCK_ENABLED_KEY, '1');
       }
     } catch (e) {
       if (e instanceof HttpError && e.status === 429) {
-        this.set({status: 'signedOut', message: '로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.'});
+        this.set({status: 'signedOut', message: 'session.tooMany'});
       } else if (e instanceof HttpError && e.status === 401) {
-        this.set({status: 'signedOut', message: '아이디 또는 비밀번호가 맞지 않습니다.'});
+        this.set({status: 'signedOut', message: 'session.badCredentials'});
       } else if (e instanceof HttpError && e.status < 500) {
-        this.set({status: 'signedOut', message: '입력값을 확인해 주세요.'});
+        this.set({status: 'signedOut', message: 'session.badInput'});
       } else if (secureStoreErrorCode(e)) {
         // 로그인은 됐지만 생체 잠금 설정을 취소·실패 → 잠금 없이 계속
         return;
       } else {
-        this.set({status: 'signedOut', message: '서버에 연결할 수 없습니다.'});
+        this.set({status: 'signedOut', message: 'session.unreachable'});
       }
     }
   }
@@ -114,7 +124,10 @@ class SessionManager {
   async logout() {
     const refreshToken = await secureStore.get(REFRESH_KEY).catch(() => null);
     if (refreshToken) {
-      await request('/auth/logout', {method: 'POST', body: {refreshToken}}).catch(() => {});
+      await request('/auth/logout', {
+        method: 'POST',
+        body: {refreshToken},
+      }).catch(() => {});
     }
     await this.clear();
     this.set({status: 'signedOut'});
@@ -150,13 +163,16 @@ class SessionManager {
     const refreshToken = await secureStore.get(REFRESH_KEY);
     if (!refreshToken) return null;
     try {
-      const {data} = await request<TokenResponse>('/auth/refresh', {method: 'POST', body: {refreshToken}});
+      const {data} = await request<TokenResponse>('/auth/refresh', {
+        method: 'POST',
+        body: {refreshToken},
+      });
       await this.accept(data);
       return data.accessToken;
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) {
         await this.clear();
-        this.set({status: 'signedOut', message: '세션이 만료되었습니다. 다시 로그인해 주세요.'});
+        this.set({status: 'signedOut', message: 'session.expired'});
       }
       return null;
     }

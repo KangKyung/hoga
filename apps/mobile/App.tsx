@@ -1,20 +1,27 @@
 /**
- * Hoga — M3: 로그인 · 주문 · 보안.
+ * Hoga — M5: 웹 화면 · 분석 · 현지화.
  * 시세: 소켓(iOS URLSession / Android OkHttp) → C++ MarketClient → JS가 화면 주기로 끌어옴
  * 주문: 멱등 키 + 타임아웃 시 조회로 확정, 체결 알림은 C++ → JS 이벤트
+ * 차트: Fabric 네이티브 뷰가 C++ 봉을 직접 읽음
+ * 웹: 종목정보(HTML/JS)·공지(AngularJS)를 웹뷰로 열고 검증된 브리지로만 주고받음
  */
 import React, {useEffect, useRef, useState} from 'react';
 import {ActivityIndicator, StatusBar, StyleSheet, Text, View} from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 
+import {track} from './src/analytics/analytics';
 import {fetchSymbols, type SymbolInfo} from './src/api/symbols';
 import {session, useSession} from './src/auth/session';
 import {SECURE_SCREEN, SERVER} from './src/config';
+import {refreshFromServer, t, useI18n} from './src/i18n';
+import {loadSavedLocale} from './src/i18n/persist';
 import {hogaCore, type OrderEvent} from './src/native/hogaCore';
 import {deviceGuard} from './src/native/security';
 import {orderService} from './src/orders/orderService';
 import {LoginScreen} from './src/screens/LoginScreen';
+import {NoticesScreen} from './src/screens/NoticesScreen';
 import {QuoteScreen} from './src/screens/QuoteScreen';
+import {SettingsScreen} from './src/screens/SettingsScreen';
 import {WatchlistScreen} from './src/screens/WatchlistScreen';
 import {colors, formatPrice} from './src/theme';
 
@@ -59,10 +66,18 @@ function useBanner() {
   return {text, show};
 }
 
+type Route = {name: 'watchlist'} | {name: 'quote'; symbol: SymbolInfo} | {name: 'notices'} | {name: 'settings'};
+
 function Main({userName}: {userName: string}) {
+  useI18n(); // 언어가 바뀌면 다시 그린다
   const {symbols, error} = useSymbols();
-  const [selected, setSelected] = useState<SymbolInfo | null>(null);
+  const [route, setRoute] = useState<Route>({name: 'watchlist'});
   const banner = useBanner();
+  const home = () => setRoute({name: 'watchlist'});
+
+  useEffect(() => {
+    track('screen_view', {screen_name: route.name});
+  }, [route.name]);
 
   useEffect(() => {
     if (symbols.length) hogaCore.subscribe(symbols.map(s => s.code));
@@ -74,10 +89,10 @@ function Main({userName}: {userName: string}) {
       .reconcile()
       .then(r => {
         const parts = [];
-        if (r.confirmed.length) parts.push(`접수 확인 ${r.confirmed.length}건`);
-        if (r.notSent.length) parts.push(`전송되지 않은 주문 ${r.notSent.length}건(다시 보내지 않음)`);
-        if (r.stillUnknown.length) parts.push(`아직 확인 중 ${r.stillUnknown.length}건`);
-        if (parts.length) banner.show(`이전 주문 정리: ${parts.join(' · ')}`);
+        if (r.confirmed.length) parts.push(t('banner.reconcileConfirmed', {n: r.confirmed.length}));
+        if (r.notSent.length) parts.push(t('banner.reconcileNotSent', {n: r.notSent.length}));
+        if (r.stillUnknown.length) parts.push(t('banner.reconcileUnknown', {n: r.stillUnknown.length}));
+        if (parts.length) banner.show(t('banner.reconcile', {parts: parts.join(' · ')}));
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,7 +102,13 @@ function Main({userName}: {userName: string}) {
   useEffect(() => {
     const sub = hogaCore.onOrderEvent((e: OrderEvent) => {
       if (e.fill) {
-        banner.show(`체결 ${e.side === 'bid' ? '매수' : '매도'} ${formatPrice(e.fill.price)} × ${formatPrice(e.fill.qty)}주`);
+        banner.show(
+          t('banner.fill', {
+            side: t(e.side === 'bid' ? 'common.buy' : 'common.sell'),
+            price: formatPrice(e.fill.price),
+            qty: formatPrice(e.fill.qty),
+          }),
+        );
       }
     });
     return () => sub.remove();
@@ -96,10 +117,24 @@ function Main({userName}: {userName: string}) {
 
   return (
     <View style={styles.container}>
-      {selected ? (
-        <QuoteScreen symbol={selected} onBack={() => setSelected(null)} />
+      {route.name === 'quote' ? (
+        <QuoteScreen symbol={route.symbol} onBack={home} />
+      ) : route.name === 'notices' ? (
+        <NoticesScreen onBack={home} />
+      ) : route.name === 'settings' ? (
+        <SettingsScreen onBack={home} />
       ) : (
-        <WatchlistScreen userName={userName} symbols={symbols} error={error} onSelect={setSelected} />
+        <WatchlistScreen
+          userName={userName}
+          symbols={symbols}
+          error={error}
+          onSelect={symbol => {
+            track('select_symbol', {symbol: symbol.code});
+            setRoute({name: 'quote', symbol});
+          }}
+          onOpenNotices={() => setRoute({name: 'notices'})}
+          onOpenSettings={() => setRoute({name: 'settings'})}
+        />
       )}
       {banner.text ? (
         <View testID="banner" style={styles.banner} pointerEvents="none">
@@ -117,6 +152,8 @@ function App(): React.JSX.Element {
     // 시세는 로그인과 무관하게 연결, 로그인하면 세션이 토큰을 넘겨 주문 알림까지 받는다
     hogaCore.connect(SERVER.ws, SERVER.http);
     deviceGuard.setSecureScreen(SECURE_SCREEN); // 잔고·주문 화면이 캡처·앱 전환기에 남지 않게
+    // 저장된 언어 → 서버 번역 갱신(실패해도 내장 번역으로 계속)
+    loadSavedLocale().finally(() => refreshFromServer(SERVER.http));
     session.restore();
     return () => hogaCore.disconnect();
   }, []);

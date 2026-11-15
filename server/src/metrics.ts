@@ -34,6 +34,14 @@ export class Metrics {
     return this.counters.get(k) ?? this.gauges.get(k)?.() ?? 0;
   }
 
+  /** 이름이 같은 모든 라벨 값의 합(관리 콘솔 요약용) */
+  sum(name: string): number {
+    let total = 0;
+    for (const [k, v] of this.counters) if (k === name || k.startsWith(`${name}{`)) total += v;
+    for (const [k, read] of this.gauges) if (k === name || k.startsWith(`${name}{`)) total += read();
+    return total;
+  }
+
   render(): string {
     const lines: string[] = [];
     const seen = new Set<string>();

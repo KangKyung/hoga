@@ -1,7 +1,9 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 
+import { registerAdminRoutes, type FaultState } from './api/admin.js';
 import { registerAuthRoutes } from './api/auth.js';
 import { registerOrderRoutes, type OrderRecord } from './api/orders.js';
+import { registerWebRoutes } from './api/web.js';
 import { AuthService } from './auth/auth.js';
 import { UserStore } from './auth/users.js';
 import { InMemoryBus, type Bus } from './bus.js';
@@ -57,6 +59,7 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     }
   });
   const startedAt = Date.now();
+  const faults: FaultState = { orderDelayMs: config.FAULT_ORDER_DELAY_MS };
 
   app.get('/healthz', async () => ({ ok: true, coreVersion: coreVersion(), uptimeMs: Date.now() - startedAt }));
   app.get('/readyz', async () => ({ ready: true, bus: 'memory', idempotency: 'memory' }));
@@ -100,8 +103,10 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     tracker,
     auth,
     metrics,
-    responseDelayMs: config.FAULT_ORDER_DELAY_MS,
+    responseDelayMs: () => faults.orderDelayMs,
   });
+  registerWebRoutes(app, { market, config });
+  registerAdminRoutes(app, { token: config.ADMIN_TOKEN, market, gateway, metrics, faults });
 
   let stopSimulator = () => {};
   const sweeper = setInterval(() => store.sweep(), 60_000);

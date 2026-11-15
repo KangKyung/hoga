@@ -92,6 +92,16 @@ export class Gateway {
     return this.clients.size;
   }
 
+  /**
+   * 장애 시연(관리 콘솔): 서버는 그대로 두고 지금 연결만 1012로 끊는다.
+   * 클라이언트가 백오프로 재접속하고 스냅샷으로 다시 맞추는지 보기 위한 것. 끊은 수를 돌려준다.
+   */
+  disconnectAll(): number {
+    const count = this.clients.size;
+    for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, 'admin disconnect');
+    return count;
+  }
+
   /** 정상 종료: 새 연결을 받지 않고 기존 연결에 1012를 보낸다 */
   async close(): Promise<void> {
     if (this.closing) return;

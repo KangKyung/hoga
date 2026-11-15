@@ -6,6 +6,7 @@ import {session} from '../auth/session';
 import {StatusBadge} from '../components/StatusBadge';
 import {deviceGuard} from '../native/security';
 import {useBook, useConnectionState, useTrades} from '../hooks/market';
+import {useI18n} from '../i18n';
 import {colors, formatChange, formatPrice, mono, priceColor} from '../theme';
 
 interface Props {
@@ -13,24 +14,35 @@ interface Props {
   symbols: SymbolInfo[];
   error: string | null;
   onSelect: (symbol: SymbolInfo) => void;
+  onOpenNotices: () => void;
+  onOpenSettings: () => void;
 }
 
-export function WatchlistScreen({userName, symbols, error, onSelect}: Props) {
+export function WatchlistScreen({userName, symbols, error, onSelect, onOpenNotices, onOpenSettings}: Props) {
+  const {t} = useI18n();
   const connection = useConnectionState();
   const security = deviceGuard.status();
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>관심종목</Text>
+        <Text style={styles.title}>{t('watchlist.title')}</Text>
         <StatusBadge connection={connection} sync="live" />
       </View>
       <View style={styles.userRow}>
-        <Text style={styles.user}>{userName}님</Text>
-        <Pressable testID="logout" onPress={() => session.logout()} hitSlop={8}>
-          <Text style={styles.logout}>로그아웃</Text>
-        </Pressable>
+        <Text style={styles.user}>{t('watchlist.user', {name: userName})}</Text>
+        <View style={styles.links}>
+          <Pressable testID="openNotices" onPress={onOpenNotices} hitSlop={8}>
+            <Text style={styles.logout}>{t('watchlist.notices')}</Text>
+          </Pressable>
+          <Pressable testID="openSettings" onPress={onOpenSettings} hitSlop={8}>
+            <Text style={styles.logout}>{t('watchlist.settings')}</Text>
+          </Pressable>
+          <Pressable testID="logout" onPress={() => session.logout()} hitSlop={8}>
+            <Text style={styles.logout}>{t('watchlist.logout')}</Text>
+          </Pressable>
+        </View>
       </View>
-      {error ? <Text style={styles.error}>서버에 연결할 수 없습니다 · {error}</Text> : null}
+      {error ? <Text style={styles.error}>{t('watchlist.unreachable', {error})}</Text> : null}
       <FlatList
         data={symbols}
         keyExtractor={s => s.code}
@@ -40,12 +52,14 @@ export function WatchlistScreen({userName, symbols, error, onSelect}: Props) {
       />
       <Text testID="securitySignal" style={[styles.footnote, security.compromised && styles.warning]}>
         {security.compromised
-          ? `보안 경고: ${security.reasons.join(', ')} (서버에서 거래가 제한될 수 있습니다)`
+          ? t('watchlist.securityWarning', {
+              reasons: security.reasons.join(', '),
+            })
           : security.emulator
-            ? '보안 신호: 에뮬레이터/시뮬레이터(개발 환경)'
-            : '보안 신호: 이상 없음'}
+          ? t('watchlist.securityEmulator')
+          : t('watchlist.securityOk')}
       </Text>
-      <Text style={styles.footnote}>모의 데이터 · 실제 종목과 무관합니다</Text>
+      <Text style={styles.footnote}>{t('watchlist.footnote')}</Text>
     </View>
   );
 }
@@ -86,19 +100,45 @@ const styles = StyleSheet.create({
   },
   title: {fontSize: 24, fontWeight: '700', color: colors.accent},
   error: {marginHorizontal: 16, marginBottom: 8, color: colors.danger},
-  list: {marginHorizontal: 16, backgroundColor: colors.card, borderRadius: 10, overflow: 'hidden'},
-  row: {flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12},
+  list: {
+    marginHorizontal: 16,
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
   pressed: {backgroundColor: colors.bg},
-  separator: {height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginLeft: 14},
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.line,
+    marginLeft: 14,
+  },
   nameCol: {flex: 1},
   name: {fontSize: 16, fontWeight: '600', color: colors.text},
   code: {fontSize: 12, color: colors.mute, marginTop: 2},
   priceCol: {alignItems: 'flex-end'},
   price: {fontSize: 17, fontWeight: '700'},
   change: {fontSize: 12, marginTop: 2},
-  footnote: {textAlign: 'center', color: colors.mute, fontSize: 11, marginTop: 8, marginBottom: 4},
+  footnote: {
+    textAlign: 'center',
+    color: colors.mute,
+    fontSize: 11,
+    marginTop: 8,
+    marginBottom: 4,
+  },
   warning: {color: colors.danger},
-  userRow: {flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8},
+  userRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
   user: {color: colors.sub},
   logout: {color: colors.accent},
+  links: {flexDirection: 'row', gap: 16},
 });

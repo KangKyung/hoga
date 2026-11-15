@@ -1,0 +1,127 @@
+/* 웹 화면 공통. 앱(RN) 색상과 맞춘다: 상승 빨강, 하락 파랑 */
+:root {
+  --bg: #f3f5f7;
+  --card: #ffffff;
+  --text: #16202c;
+  --sub: #4a5663;
+  --mute: #7b8692;
+  --line: #e3e7ec;
+  --accent: #123c69;
+  --up: #d6293e;
+  --down: #1f5fd1;
+  --flat: #5c6773;
+  --live: #1f8a4c;
+  --warn: #c27a00;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0f141a;
+    --card: #182029;
+    --text: #e8edf2;
+    --sub: #b4bec9;
+    --mute: #8592a0;
+    --line: #2a3542;
+    --accent: #7fb0e8;
+    --up: #ff5a6a;
+    --down: #5b9bff;
+    --flat: #9aa5b1;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #0f141a;
+  --card: #182029;
+  --text: #e8edf2;
+  --sub: #b4bec9;
+  --mute: #8592a0;
+  --line: #2a3542;
+  --accent: #7fb0e8;
+  --up: #ff5a6a;
+  --down: #5b9bff;
+  --flat: #9aa5b1;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Noto Sans Thai', Roboto,
+    sans-serif;
+  /* 태국어는 성조 기호가 위아래로 붙어 줄 높이가 부족하면 잘린다 */
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+:lang(th) body,
+html:lang(th) {
+  line-height: 1.75;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.card h2 {
+  font-size: 14px;
+  color: var(--sub);
+  margin: 0 0 8px;
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.up {
+  color: var(--up);
+}
+
+.down {
+  color: var(--down);
+}
+
+.flat {
+  color: var(--flat);
+}
+
+.mute {
+  color: var(--mute);
+}
+
+.footnote {
+  text-align: center;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.hidden {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: var(--accent);
+}
