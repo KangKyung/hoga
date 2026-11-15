@@ -1,0 +1,5 @@
+daou_mts/
+.DS_Store
+**/build/
+node_modules/
+.claude/

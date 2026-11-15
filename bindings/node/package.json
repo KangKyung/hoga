@@ -1,0 +1,18 @@
+{
+  "name": "@hoga/core-node",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Node.js N-API binding for hoga-core (shared C++ engine)",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "cmake-js compile",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0"
+  },
+  "devDependencies": {
+    "cmake-js": "^8.0.0"
+  }
+}
