@@ -1,76 +1,76 @@
 /**
- * M0 확인 화면: JS → C++ TurboModule → hoga-core 호출이 iOS·Android에서 같은 값을 내는지 본다.
+ * Hoga — M2: 실시간 호가.
+ * 소켓(iOS URLSession / Android OkHttp) → C++ MarketClient → JS는 화면 주기로 끌어와 그린다.
  */
-import React, {useMemo} from 'react';
-import {Platform, ScrollView, StatusBar, StyleSheet, Text, View} from 'react-native';
+import React, {useEffect, useState} from 'react';
+import {StatusBar, StyleSheet} from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 
-import NativeHogaCore from './specs/NativeHogaCore';
+import {fetchSymbols, type SymbolInfo} from './src/api/symbols';
+import {SERVER} from './src/config';
+import {hogaCore} from './src/native/hogaCore';
+import {QuoteScreen} from './src/screens/QuoteScreen';
+import {WatchlistScreen} from './src/screens/WatchlistScreen';
+import {colors} from './src/theme';
 
-const SAMPLE_PRICES = [1_999, 2_000, 4_999, 5_000, 19_999, 20_000, 49_999, 50_000, 199_999, 200_000, 499_999, 500_000];
+function useSymbols() {
+  const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      fetchSymbols(controller.signal)
+        .then(list => {
+          setSymbols(list);
+          setError(null);
+        })
+        .catch(e => {
+          if (controller.signal.aborted) return;
+          setError(e instanceof Error ? e.message : String(e));
+          timer = setTimeout(load, 2000); // 서버가 늦게 떠도 다시 시도
+        });
+    };
+    load();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  return {symbols, error};
+}
 
 function App(): React.JSX.Element {
-  const version = useMemo(() => NativeHogaCore.coreVersion(), []);
-  const rows = useMemo(
-    () => SAMPLE_PRICES.map(price => ({price, tick: NativeHogaCore.tickSize(price)})),
-    [],
-  );
-  const invalidInput = useMemo(() => {
-    try {
-      NativeHogaCore.tickSize(1000.5);
-      return '오류 없음 (잘못됨)';
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e);
-    }
+  const {symbols, error} = useSymbols();
+  const [selected, setSelected] = useState<SymbolInfo | null>(null);
+
+  useEffect(() => {
+    hogaCore.connect(SERVER.ws, SERVER.http);
+    return () => hogaCore.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (symbols.length) hogaCore.subscribe(symbols.map(s => s.code));
+  }, [symbols]);
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
-      <SafeAreaView style={styles.container}>
-        <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.title}>Hoga · M0</Text>
-          <Text style={styles.caption}>JS → C++ TurboModule → hoga-core</Text>
-
-          <View style={styles.card}>
-            <Text style={styles.label}>Platform</Text>
-            <Text testID="platform">{Platform.OS}</Text>
-            <Text style={styles.label}>coreVersion()</Text>
-            <Text testID="coreVersion" style={styles.value}>{version}</Text>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.label}>tickSize(price)</Text>
-            {rows.map(({price, tick}) => (
-              <View key={price} style={styles.row}>
-                <Text style={styles.mono}>{price.toLocaleString('ko-KR')}원</Text>
-                <Text testID={`tick-${price}`} style={styles.mono}>
-                  {tick.toLocaleString('ko-KR')}원
-                </Text>
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.label}>tickSize(1000.5) → JS 오류</Text>
-            <Text testID="invalidInput" style={styles.mono}>{invalidInput}</Text>
-          </View>
-        </ScrollView>
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+        {selected ? (
+          <QuoteScreen symbol={selected} onBack={() => setSelected(null)} />
+        ) : (
+          <WatchlistScreen symbols={symbols} error={error} onSelect={setSelected} />
+        )}
       </SafeAreaView>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#f3f5f7'},
-  content: {padding: 16, gap: 12},
-  title: {fontSize: 24, fontWeight: '700', color: '#123c69'},
-  caption: {color: '#4a5663'},
-  card: {backgroundColor: '#fff', borderRadius: 8, padding: 12, gap: 4},
-  label: {fontSize: 12, color: '#7b8692', marginTop: 4},
-  value: {fontSize: 18, fontWeight: '600'},
-  row: {flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2},
-  mono: {fontFamily: Platform.select({ios: 'Menlo', android: 'monospace'})},
+  container: {flex: 1, backgroundColor: colors.bg},
 });
 
 export default App;

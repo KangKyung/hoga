@@ -1,0 +1,135 @@
+#pragma once
+
+#include <chrono>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "hoga/book_sync.hpp"
+#include "hoga/transport.hpp"
+
+namespace hoga {
+
+enum class ConnectionState : std::uint8_t {
+  Idle,          // start() 전
+  Connecting,    // 첫 연결 시도 중
+  Open,          // 연결됨
+  Reconnecting,  // 끊겨서 백오프 후 재연결 대기·시도 중
+  Stopped,       // stop() 후
+};
+
+std::string_view toString(ConnectionState state) noexcept;
+std::string_view toString(SyncState state) noexcept;
+
+struct Trade {
+  Price price{0};
+  Qty qty{0};
+  Side aggressor{Side::Bid};
+  std::int64_t ts{0};
+};
+
+// JS·UI가 읽어 가는 한 종목의 화면용 사본.
+struct BookView {
+  bool subscribed{false};
+  Seq seq{0};
+  SyncState sync{SyncState::WaitingSnapshot};
+  std::vector<Level> bids;
+  std::vector<Level> asks;
+  std::int64_t lastUpdateMs{0};  // 마지막으로 호가가 바뀐 시각(epoch ms)
+};
+
+struct ClientStats {
+  ConnectionState state{ConnectionState::Idle};
+  std::uint32_t attempt{0};       // 연속 재연결 시도 횟수(연결되면 0)
+  std::uint64_t messages{0};
+  std::uint64_t gaps{0};          // seq 누락 감지 횟수
+  std::uint64_t resyncs{0};       // 스냅샷으로 다시 맞춘 횟수
+  std::uint64_t reconnects{0};
+  std::uint64_t parseErrors{0};
+  std::string lastError;
+};
+
+struct MarketClientOptions {
+  std::string wsUrl;        // ws://host:port/ws
+  std::string httpBaseUrl;  // http://host:port (스냅샷 요청용)
+  std::chrono::milliseconds backoffBase{500};
+  std::chrono::milliseconds backoffMax{30'000};
+  std::chrono::milliseconds snapshotRetry{1'000};
+  std::size_t tradeHistory{50};
+  std::size_t snapshotDepth{50};
+  std::function<double()> random;         // [0, 1). 기본: 표준 난수
+  std::function<std::int64_t()> nowMs;    // 기본: system_clock
+};
+
+/**
+ * 시세 클라이언트(플랫폼 공용).
+ *
+ * - 연결·재연결: 끊기면 full jitter 지수 백오프로 흩어져 재접속(서버 재시작 때 일제히 몰리지 않게).
+ * - 구독: 연결될 때마다 원하는 종목을 다시 구독, 서버가 스냅샷을 먼저 보낸다.
+ * - 재동기화: 종목별 BookSync가 seq 누락을 감지하면 HTTP로 스냅샷을 받아 이어 붙인다.
+ * - 스레드: 소켓·HTTP·타이머 콜백(아무 스레드)은 내부 뮤텍스로 직렬화한다.
+ *   book()/trades()/stats()는 JS·UI 스레드에서 언제든 불러도 된다(복사본을 돌려준다).
+ * - 수명: 콜백은 weak_ptr로 자신을 잡아서, 클라이언트가 사라진 뒤 도착한 콜백은 무시된다.
+ *   연결마다 세대(generation) 번호를 붙여 이전 연결에서 늦게 온 콜백도 무시한다.
+ */
+class MarketClient : public std::enable_shared_from_this<MarketClient> {
+ public:
+  using StateListener = std::function<void(ConnectionState state, std::uint32_t attempt)>;
+
+  static std::shared_ptr<MarketClient> create(std::shared_ptr<ITransport> transport,
+                                              MarketClientOptions options,
+                                              StateListener listener = {});
+
+  void start();
+  void stop();
+
+  void subscribe(const std::vector<std::string>& symbols);
+  void unsubscribe(const std::vector<std::string>& symbols);
+
+  BookView book(const std::string& symbol, std::size_t depth) const;
+  std::vector<Trade> trades(const std::string& symbol, std::size_t limit) const;
+  ClientStats stats() const;
+
+  // attempt번째(1부터) 재연결 전 대기 시간. [0, min(max, base·2^(attempt-1))) 범위의 무작위 값.
+  std::chrono::milliseconds backoffDelay(std::uint32_t attempt) const;
+
+ private:
+  struct SymbolData {
+    std::unique_ptr<BookSync> sync = std::make_unique<BookSync>();
+    std::deque<Trade> trades;
+    std::int64_t lastUpdateMs{0};
+    bool snapshotInFlight{false};
+  };
+  using Deferred = std::vector<std::function<void()>>;
+
+  MarketClient(std::shared_ptr<ITransport> transport, MarketClientOptions options, StateListener listener);
+
+  void connectLocked(Deferred& after);
+  void setStateLocked(ConnectionState state, Deferred& after);
+  void onOpen(std::uint64_t generation);
+  void onMessage(std::uint64_t generation, const std::string& text);
+  void onClose(std::uint64_t generation, int code, const std::string& reason);
+  void handleMessageLocked(const std::string& text);
+  void requestSnapshotLocked(const std::string& symbol);
+  void onSnapshotResponse(const std::string& symbol, int status, const std::string& body);
+  void sendOpLocked(const char* op, const std::vector<std::string>& symbols);
+  static void run(Deferred& after);
+
+  mutable std::mutex mutex_;
+  std::shared_ptr<ITransport> transport_;
+  MarketClientOptions options_;
+  StateListener listener_;
+
+  std::map<std::string, SymbolData, std::less<>> symbols_;
+  ConnectionState state_{ConnectionState::Idle};
+  std::uint64_t generation_{0};
+  ClientStats stats_;
+};
+
+}  // namespace hoga

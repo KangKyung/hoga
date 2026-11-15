@@ -10,6 +10,8 @@ get_filename_component(HOGA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../
 
 add_subdirectory(${HOGA_ROOT}/core ${CMAKE_CURRENT_BINARY_DIR}/hoga_core)
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${HOGA_ROOT}/bindings/turbomodule/NativeHogaCore.cpp)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+  ${HOGA_ROOT}/bindings/turbomodule/NativeHogaCore.cpp
+  ${HOGA_ROOT}/bindings/turbomodule/android/AndroidTransport.cpp)
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${HOGA_ROOT}/bindings/turbomodule)
 target_link_libraries(${CMAKE_PROJECT_NAME} hoga_core)

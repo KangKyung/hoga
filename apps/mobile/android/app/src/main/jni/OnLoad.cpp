@@ -27,7 +27,8 @@
 //    }
 // }
 
-// RN 기본 OnLoad.cpp를 복사해 C++ TurboModule(NativeHogaCore) 등록만 추가했다.
+// RN 기본 OnLoad.cpp를 복사해 C++ TurboModule(NativeHogaCore) 등록과
+// Kotlin 전송 계층(HogaTransport)의 JNI 네이티브 메서드 등록을 추가했다.
 #include <NativeHogaCore.h>
 
 #include <DefaultComponentsRegistry.h>
@@ -117,8 +118,15 @@ std::shared_ptr<TurboModule> javaModuleProvider(
 
 } // namespace facebook::react
 
+namespace hoga::platform {
+bool registerHogaTransportNatives(JavaVM* vm, JNIEnv* env);
+} // namespace hoga::platform
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
-  return facebook::jni::initialize(vm, [] {
+  return facebook::jni::initialize(vm, [vm] {
+    // 앱 클래스 로더가 보이는 지금 Kotlin 전송 클래스를 찾아 둔다.
+    hoga::platform::registerHogaTransportNatives(
+        vm, facebook::jni::Environment::current());
     facebook::react::DefaultTurboModuleManagerDelegate::cxxModuleProvider =
         &facebook::react::cxxModuleProvider;
     facebook::react::DefaultTurboModuleManagerDelegate::javaModuleProvider =

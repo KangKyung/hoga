@@ -21,7 +21,7 @@ Pod::Spec.new do |s|
   s.private_header_files = "core/include/**/*.hpp", "bindings/turbomodule/*.h"
 
   s.pod_target_xcconfig = {
-    "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/core/include\"",
+    "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/core/include\" \"$(PODS_TARGET_SRCROOT)/core/third_party\"",
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
   }
 

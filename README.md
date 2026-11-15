@@ -10,8 +10,20 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | 단계 | 내용 | 상태 |
 |---|---|---|
 | M0 | 같은 C++ 함수를 C++ · Node · iOS · Android에서 호출 | 완료 |
-| **M1** | C++ 호가·재동기화·주문 검증·매칭 엔진 + Node 모의 거래소 서버 | **완료** |
-| M2 | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | 다음 |
+| M1 | C++ 호가·재동기화·주문 검증·매칭 엔진 + Node 모의 거래소 서버 | 완료 |
+| **M2** | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | **완료** |
+| M3 | 주문 화면 · 멱등 주문 · 보안 저장소 · 생체 인증 | 다음 |
+
+### M2 검증 결과 (2026-11-15)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| C++ `MarketClient` | 가짜 전송 계층으로 재연결·지터·재동기화·늦은 콜백 무시 등 10개 (코어 전체 47개) | 일반 · ASan+UBSan · TSan 통과 |
+| JS | Jest(목 TurboModule로 연결·구독·호가 화면) · `tsc` · ESLint | 통과 |
+| iOS 26.4 시뮬레이터 | 관심종목 · 실시간 호가 · 체결 | [목록](docs/m2-ios-watchlist.png) · [호가](docs/m2-ios-quote.png) |
+| Android 17 에뮬레이터 | 같은 화면, 같은 C++ 코드 | [목록](docs/m2-android-watchlist.png) · [호가](docs/m2-android-quote.png) |
+| 서버 종료(1012) | 두 앱 모두 "재연결 중"으로 바뀌고 끊긴 동안의 호가를 비움 → 서버 재시작 후 자동 복구 | [캡처](docs/m2-ios-reconnecting.png) |
+| 변경분 5% 고의 누락 (`FAULT_DROP_SEQ_RATE=0.05`) | iOS 누락 감지 33 → 재동기화 33, Android 100 → 100. 화면은 계속 "실시간" | [iOS](docs/m2-ios-resync-stats.png) · [Android](docs/m2-android-resync-stats.png) |
 
 ### M1 검증 결과 (2026-11-15)
 
@@ -21,6 +33,28 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | Node 애드온 | node:test 7개 (매칭 엔진·검증 규칙을 C++에서 그대로 호출) | 통과 |
 | 서버 | vitest 20개 (단위 + 실제 포트를 여는 통합 테스트) | 3회 연속 통과, `tsc` 통과 |
 | 서버 실제 실행 | 2초 동안 2종목 구독 → 변경분 43개, seq 누락 0, SIGTERM 정상 종료 | 확인 |
+
+### M2 데이터 흐름 — 고빈도 시세는 JS를 지나가지 않는다
+
+```
+ 서버 ──WebSocket──▶ iOS: URLSessionWebSocketTask (IosTransport.mm, Objective-C++)
+                     Android: OkHttp (HogaTransport.kt) ──JNI──▶ AndroidTransport.cpp
+                              │  hoga::ITransport (C++ 인터페이스)
+                              ▼
+                     hoga::MarketClient (C++, 두 플랫폼 공용)
+                       · 종목별 BookSync: seq 누락 감지 → HTTP 스냅샷 → 이어 붙이기
+                       · 끊기면 full jitter 지수 백오프로 재접속, 연결마다 세대 번호로 늦은 콜백 무시
+                              ▲  JSI 동기 호출(getBook)을 초당 12회만
+ React Native 화면 ───────────┘   + 연결 상태는 C++ EventEmitter로 (드물게 바뀌는 것만)
+```
+
+- **왜 끌어오기(pull)인가**: 서버는 초당 수십~수백 건을 보내지만 화면은 초당 12번이면 충분합니다. 매 메시지를 JS 이벤트로 보내면 JS 스레드가 바빠져 버튼 반응이 늦어집니다. 바뀐 게 없으면(`seq`·상태가 같으면) 다시 그리지 않습니다.
+- **왜 플랫폼 소켓인가**: 프록시·VPN·셀룰러 전환·인증서 고정 같은 OS 기능을 그대로 쓰기 위해서입니다. C++는 `ITransport`만 알고, iOS·Android가 각자 구현합니다.
+- **스레드·수명 안전장치**
+  - `MarketClient`는 소켓·HTTP·타이머 콜백(아무 스레드)을 뮤텍스로 직렬화하고, 자신을 `weak_ptr`로 잡아 사라진 뒤의 콜백을 무시합니다.
+  - JNI: 클래스·메서드 ID는 `JNI_OnLoad`에서 찾아 전역 참조로 보관합니다(네이티브 스레드에서 `FindClass`를 하면 앱 클래스 로더를 못 찾음). Kotlin 객체는 `NewGlobalRef`로 잡고 소멸 시 `release()` 후 해제합니다.
+  - 교착 방지: C++는 자기 뮤텍스를 잡은 채 Java를 부르지 않고, Kotlin은 콜백 전달 잠금과 소켓 조작을 분리합니다.
+  - TurboModule 이벤트는 JS 스레드로 넘긴 뒤 모듈이 살아 있을 때만 내보냅니다.
 
 ### M0 검증 결과
 
@@ -39,11 +73,16 @@ hoga/
 │  │  ├─ order_book.hpp           # L2 호가창 (단일 작성자 + 다중 읽기, shared_mutex)
 │  │  ├─ book_sync.hpp            # seq 기반 스냅샷 + 변경분 재동기화 상태 머신
 │  │  ├─ order.hpp                # 주문 검증 (앱·서버 공용 규칙)
-│  │  └─ matching_engine.hpp      # 가격·시간 우선 매칭 엔진
+│  │  ├─ matching_engine.hpp      # 가격·시간 우선 매칭 엔진
+│  │  ├─ transport.hpp            # 플랫폼 네트워크·타이머 인터페이스
+│  │  └─ market_client.hpp        # 시세 클라이언트 (재연결·구독·재동기화)
+│  ├─ third_party/nlohmann/       # JSON 파서 (MIT, v3.12.0)
 │  └─ tests/
 ├─ bindings/
 │  ├─ node/                       # N-API 애드온 → 서버가 매칭·검증에 사용
 │  └─ turbomodule/                # RN C++ TurboModule (iOS·Android 공용 구현 1벌)
+│     ├─ ios/IosTransport.mm      # URLSession 웹소켓 (Objective-C++)
+│     └─ android/AndroidTransport.cpp  # JNI ↔ Kotlin HogaTransport (OkHttp)
 ├─ server/                        # Node.js 모의 거래소 (TypeScript, Fastify, ws)
 │  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기
 │  ├─ src/gateway/                # WebSocket 팬아웃 (백프레셔·하트비트·제한)
@@ -51,6 +90,9 @@ hoga/
 │  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현, Redis는 M6)
 │  └─ test/
 ├─ apps/mobile/                   # React Native 0.88 앱
+│  ├─ src/screens/                # 관심종목 · 실시간 호가
+│  ├─ src/hooks/                  # usePolled: C++에서 화면 주기로 끌어오기
+│  └─ android/.../transport/HogaTransport.kt
 └─ HogaNative.podspec             # iOS: core + turbomodule 소스를 컴파일
 ```
 
@@ -134,8 +176,9 @@ cd bindings/node && npm install && npx cmake-js compile -G Ninja && npm test
 # 3) 서버
 cd server && npm install && npm test && npm start
 
-# 4) 앱
+# 4) 앱 (서버가 8080에서 떠 있어야 시세가 보인다)
 cd apps/mobile && npm install
+adb reverse tcp:8080 tcp:8080   # Android 에뮬레이터 → Mac의 서버
 (cd ios && pod install) && npx react-native run-ios
 npx react-native run-android --active-arch-only
 ```
@@ -177,5 +220,8 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 호가가격단위 · 가격제한폭은 **간소화한 규칙**입니다. KRX 규정 원문과 대조하고 출처를 남겨야 합니다.
 - 서버의 버스·멱등 저장소는 메모리 구현만 있습니다. 여러 프로세스 확장(Redis Pub/Sub, `SET NX`)은 M6에서 붙입니다.
 - 인증이 없어 누구나 남의 주문 키로 조회·취소할 수 있습니다(M3에서 JWT 추가).
-- 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용).
-- 다음: **M2** — 앱이 서버에 붙어 실시간 호가를 표시. 소켓은 iOS `URLSession`(Obj-C++) / Android `OkHttp`(Kotlin + JNI)로 받고, C++ `BookSync`가 재동기화를 맡습니다.
+- 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용). 재연결 후에도 이전 체결 목록은 그대로 보입니다.
+- 앱의 서버 주소는 `localhost:8080`으로 고정입니다(시뮬레이터·에뮬레이터 개발용).
+- 인증서 고정·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
+- 차트는 M4(Fabric 네이티브 뷰)에서 만듭니다.
+- 다음: **M3** — 주문 화면(호가 탭 → 주문, 멱등 키, 타임아웃 시 조회로 확정), 보안 저장소(Keychain·Keystore), 생체 인증, 탈옥·루팅 신호.

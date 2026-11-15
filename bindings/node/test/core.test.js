@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const core = require('..');
 
 test('coreVersion은 앱과 같은 코어 버전을 돌려준다', () => {
-  assert.equal(core.coreVersion(), '0.1.0-m1');
+  assert.equal(core.coreVersion(), '0.2.0-m2');
 });
 
 test('tickSize 가격대 경계', () => {

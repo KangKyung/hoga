@@ -70,7 +70,7 @@ describe('HTTP API', () => {
   it('헬스 체크와 종목 목록', async () => {
     const server = await start();
     const health = await (await fetch(`${server.url()}/healthz`)).json();
-    expect(health).toMatchObject({ ok: true, coreVersion: '0.1.0-m1' });
+    expect(health).toMatchObject({ ok: true, coreVersion: '0.2.0-m2' });
     const symbols = (await (await fetch(`${server.url()}/symbols`)).json()) as { code: string }[];
     expect(symbols.map((s) => s.code)).toContain('000001');
     expect((await fetch(`${server.url()}/book/999999`)).status).toBe(404);
