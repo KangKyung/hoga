@@ -41,7 +41,7 @@
   },
   "codegenConfig": {
     "name": "AppSpecs",
-    "type": "modules",
+    "type": "all",
     "jsSrcsDir": "specs",
     "android": {
       "javaPackageName": "com.hogaapp.specs"
@@ -51,6 +51,9 @@
         "NativeHogaCore": "HogaCoreModuleProvider",
         "NativeSecureStore": "HogaSecureStore",
         "NativeDeviceGuard": "HogaDeviceGuard"
+      },
+      "componentProvider": {
+        "HogaChartView": "HogaChartComponentView"
       }
     }
   }

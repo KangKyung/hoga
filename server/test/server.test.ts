@@ -103,7 +103,7 @@ describe('HTTP API', () => {
   it('헬스 체크와 종목 목록', async () => {
     const server = await start();
     const health = await (await fetch(`${server.url()}/healthz`)).json();
-    expect(health).toMatchObject({ ok: true, coreVersion: '0.3.0-m3' });
+    expect(health).toMatchObject({ ok: true, coreVersion: '0.4.0-m4' });
     const symbols = (await (await fetch(`${server.url()}/symbols`)).json()) as { code: string }[];
     expect(symbols.map((s) => s.code)).toContain('000001');
     expect((await fetch(`${server.url()}/book/999999`)).status).toBe(404);
@@ -368,5 +368,32 @@ describe('사용자별 주문', () => {
     const err = await client.waitFor(isType('error'));
     expect(err.code).toBe('UNAUTHORIZED');
     client.ws.close();
+  });
+});
+
+describe('봉(차트)', () => {
+  it('시작 시 과거 봉을 채우고, 체결이 나면 마지막 봉이 갱신된다', async () => {
+    const server = await start({ HISTORY_MINUTES: '30' });
+    const get = async (q = '') =>
+      (await (await fetch(`${server.url()}/candles/000001${q}`)).json()) as { interval: number; bars: number[][] };
+    const first = await get();
+    expect(first.interval).toBe(60_000);
+    expect(first.bars.length).toBe(30);
+    for (const [start, open, high, low, close, volume] of first.bars) {
+      expect(start! % 60_000).toBe(0);
+      expect(high).toBeGreaterThanOrEqual(Math.max(open!, close!));
+      expect(low).toBeLessThanOrEqual(Math.min(open!, close!));
+      expect(volume).toBeGreaterThan(0);
+    }
+    const five = await get('?interval=5m');
+    expect(five.interval).toBe(300_000);
+    expect(five.bars.length).toBeLessThanOrEqual(7);
+
+    await postOrder(server, { symbol: '000001', side: 'ask', price: 71_200, qty: 3 });
+    await postOrder(server, { symbol: '000001', side: 'bid', price: 71_200, qty: 3 }, randomUUID(), 'trader2');
+    const after = await get();
+    const last = after.bars.at(-1)!;
+    expect(last[4]).toBe(71_200); // 종가 = 방금 체결가
+    expect((await fetch(`${server.url()}/candles/000001?interval=2m`)).status).toBe(400);
   });
 });

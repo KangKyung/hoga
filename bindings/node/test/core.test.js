@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const core = require('..');
 
 test('coreVersion은 앱과 같은 코어 버전을 돌려준다', () => {
-  assert.equal(core.coreVersion(), '0.3.0-m3');
+  assert.equal(core.coreVersion(), '0.4.0-m4');
 });
 
 test('tickSize 가격대 경계', () => {
@@ -68,4 +68,15 @@ test('MatchingEngine: 잘못된 주문은 거부, 잘못된 형식은 TypeError'
   assert.equal(r.id, 0);
   assert.throws(() => engine.submit({ side: 'bid', price: 10000, qty: 1.5 }), TypeError);
   assert.throws(() => new core.MatchingEngine({}), TypeError);
+});
+
+test('CandleSeries: 체결을 1분 봉으로, 5분 봉은 읽을 때 묶는다', () => {
+  const s = new core.CandleSeries({ intervalMs: 60000 });
+  s.addTrade(1000, 100, 1);
+  s.addTrade(2000, 110, 2);
+  s.addTrade(61000, 90, 3);
+  assert.deepEqual(s.bars(10), [[0, 100, 110, 100, 110, 3], [60000, 90, 90, 90, 90, 3]]);
+  assert.deepEqual(s.bars(10, 300000), [[0, 100, 110, 90, 90, 6]]);
+  assert.ok(s.version >= 3);
+  assert.throws(() => s.addTrade(0, 1.5, 1), TypeError);
 });

@@ -18,3 +18,9 @@ export const STALE_AFTER_MS = 3_000;
 
 /** 주문 응답 제한 시간. 넘으면 실패가 아니라 "확인 중"으로 넘어가 조회로 확정한다. */
 export const ORDER_TIMEOUT_MS = 3_000;
+
+/**
+ * 민감 화면 보호(Android FLAG_SECURE, iOS 앱 전환기 가림). 기본 켜짐.
+ * 화면 캡처로 검증할 때만 로컬에서 잠시 끈다(커밋하지 않는다).
+ */
+export const SECURE_SCREEN = true;

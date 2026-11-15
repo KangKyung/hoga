@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -46,6 +47,15 @@ class FakeTransport : public hoga::ITransport {
     auto pending = std::move(timers);
     timers.clear();
     for (auto& t : pending) t.fn();
+  }
+
+  // 스냅샷(재동기화) 요청만. 연결 직후의 과거 봉(/candles) 요청은 제외한다.
+  std::vector<Http*> snapshots() {
+    std::vector<Http*> out;
+    for (auto& h : http) {
+      if (h.url.find("/book/") != std::string::npos) out.push_back(&h);
+    }
+    return out;
   }
 
   hoga::TransportCallbacks cb;
@@ -113,13 +123,13 @@ TEST(MarketClient, GapRequestsHttpSnapshotOnceAndReplaysBuffer) {
 
   f.transport->message(delta(12, 71'200, 80));  // 11 누락
   f.transport->message(delta(13, 71'200, 70));
-  ASSERT_EQ(f.transport->http.size(), 1u);  // 한 번만 요청
-  EXPECT_EQ(f.transport->http[0].url, "http://test/book/000001?depth=50");
+  ASSERT_EQ(f.transport->snapshots().size(), 1u);  // 한 번만 요청
+  EXPECT_EQ(f.transport->snapshots()[0]->url, "http://test/book/000001?depth=50");
   EXPECT_EQ(f.client->book("000001", 10).sync, SyncState::Resyncing);
   EXPECT_EQ(f.client->stats().gaps, 1u);
 
   // 서버 스냅샷 seq 12 → 버퍼의 13만 이어서 반영
-  f.transport->http[0].done(200, snap(12, 71'200, 80));
+  f.transport->snapshots()[0]->done(200, snap(12, 71'200, 80));
   const auto view = f.client->book("000001", 10);
   EXPECT_EQ(view.sync, SyncState::Live);
   EXPECT_EQ(view.seq, 13u);
@@ -134,11 +144,11 @@ TEST(MarketClient, FailedSnapshotIsRetriedLater) {
   f.transport->open();
   f.transport->message(snap(10, 71'200, 100));
   f.transport->message(delta(12, 71'200, 80));
-  f.transport->http[0].done(503, "");
+  f.transport->snapshots()[0]->done(503, "");
   ASSERT_EQ(f.transport->timers.size(), 1u);
   EXPECT_EQ(f.transport->timers[0].delay, 1'000ms);
   f.transport->runTimers();
-  ASSERT_EQ(f.transport->http.size(), 2u);
+  ASSERT_EQ(f.transport->snapshots().size(), 2u);
 }
 
 TEST(MarketClient, ReconnectsWithJitterAndResubscribes) {
@@ -278,4 +288,29 @@ TEST(MarketClient, ForwardsOrderEventsToListener) {
   f.transport->message(event);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0], event);
+}
+
+TEST(MarketClient, BuildsCandlesFromHistoryAndLiveTrades) {
+  Fixture f;
+  f.client->subscribe({"000001"});
+  f.client->start();
+  f.transport->open();
+  // 연결 직후 과거 봉 요청
+  auto req = std::find_if(f.transport->http.begin(), f.transport->http.end(),
+                          [](const auto& h) { return h.url.find("/candles/000001") != std::string::npos; });
+  ASSERT_NE(req, f.transport->http.end());
+  EXPECT_EQ(req->url, "http://test/candles/000001?limit=600");
+  req->done(200, R"({"interval":60000,"bars":[[0,100,110,90,105,7],[60000,105,106,104,106,3]]})");
+
+  const auto v1 = f.client->candleVersion("000001");
+  // 실시간 체결이 마지막 봉을 갱신
+  f.transport->message(R"({"t":"trade","sym":"000001","ts":61000,"px":120,"qty":2,"aggr":"B"})");
+  EXPECT_GT(f.client->candleVersion("000001"), v1);
+  const auto bars = f.client->candles("000001", 0, 10);
+  ASSERT_EQ(bars.size(), 2u);
+  EXPECT_EQ(bars[1].high, 120);
+  EXPECT_EQ(bars[1].close, 120);
+  EXPECT_EQ(bars[1].volume, 5);
+  // 5분 봉은 읽을 때 묶는다
+  EXPECT_EQ(f.client->candles("000001", 300000, 10).size(), 1u);
 }

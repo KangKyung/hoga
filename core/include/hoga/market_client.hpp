@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "hoga/book_sync.hpp"
+#include "hoga/candles.hpp"
 #include "hoga/transport.hpp"
 
 namespace hoga {
@@ -64,6 +65,8 @@ struct MarketClientOptions {
   std::chrono::milliseconds snapshotRetry{1'000};
   std::size_t tradeHistory{50};
   std::size_t snapshotDepth{50};
+  std::int64_t candleIntervalMs{60'000};  // 기본 봉 구간(1분). 더 긴 구간은 읽을 때 묶는다
+  std::size_t candleHistory{600};
   std::function<double()> random;         // [0, 1). 기본: 표준 난수
   std::function<std::int64_t()> nowMs;    // 기본: system_clock
 };
@@ -101,6 +104,10 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
 
   BookView book(const std::string& symbol, std::size_t depth) const;
   std::vector<Trade> trades(const std::string& symbol, std::size_t limit) const;
+  // 차트용 봉. bucketMs가 0이면 기본 구간. 화면 스레드에서 직접 불러도 된다(복사본).
+  std::vector<Candle> candles(const std::string& symbol, std::int64_t bucketMs, std::size_t limit) const;
+  // 봉이 바뀔 때마다 증가. 화면은 이 값이 바뀐 프레임에만 다시 그린다.
+  std::uint64_t candleVersion(const std::string& symbol) const;
   ClientStats stats() const;
 
   // attempt번째(1부터) 재연결 전 대기 시간. [0, min(max, base·2^(attempt-1))) 범위의 무작위 값.
@@ -112,6 +119,8 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
     std::deque<Trade> trades;
     std::int64_t lastUpdateMs{0};
     bool snapshotInFlight{false};
+    std::unique_ptr<CandleSeries> candles;
+    bool candlesInFlight{false};
   };
   using Deferred = std::vector<std::function<void()>>;
 
@@ -127,6 +136,9 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   void requestSnapshotLocked(const std::string& symbol);
   void onSnapshotResponse(const std::string& symbol, int status, const std::string& body);
   void sendOpLocked(const char* op, const std::vector<std::string>& symbols);
+  void requestCandlesLocked(const std::string& symbol);
+  void onCandlesResponse(const std::string& symbol, int status, const std::string& body);
+  SymbolData& ensureSymbolLocked(const std::string& symbol);
   static void run(Deferred& after);
 
   mutable std::mutex mutex_;

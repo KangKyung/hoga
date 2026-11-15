@@ -36,7 +36,11 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
   const log = app.log;
   const metrics = new Metrics();
   const bus: Bus = new InMemoryBus();
-  const market = new Market(bus, metrics, { dropSeqRate: config.FAULT_DROP_SEQ_RATE, ...options.market });
+  const market = new Market(bus, metrics, {
+    dropSeqRate: config.FAULT_DROP_SEQ_RATE,
+    historyMinutes: config.HISTORY_MINUTES,
+    ...options.market,
+  });
   const store = new InMemoryIdempotencyStore<OrderRecord>(config.IDEMPOTENCY_TTL_MS);
   const tracker = new OrderTracker(market, bus);
   const auth = new AuthService(new UserStore(), {
@@ -70,6 +74,22 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
       }
       const depth = Math.min(50, Math.max(1, Number(request.query.depth ?? 20) || 20));
       return market.snapshot(symbol, depth);
+    },
+  );
+
+  /** 차트용 봉. interval: 1m(기본) | 5m | 15m, 오래된 것부터 [start, open, high, low, close, volume] */
+  app.get<{ Params: { symbol: string }; Querystring: { limit?: string; interval?: string } }>(
+    '/candles/:symbol',
+    async (request, reply) => {
+      const { symbol } = request.params;
+      if (!SYMBOL_PATTERN.test(symbol) || !market.has(symbol)) {
+        return reply.code(404).send({ error: 'UNKNOWN_SYMBOL' });
+      }
+      const minutes = { '1m': 1, '5m': 5, '15m': 15 }[request.query.interval ?? '1m'];
+      if (!minutes) return reply.code(400).send({ error: 'BAD_INTERVAL' });
+      const limit = Math.min(2_000, Math.max(1, Number(request.query.limit ?? 300) || 300));
+      const interval = minutes * 60_000;
+      return { interval, bars: market.candles(symbol, limit, minutes === 1 ? 0 : interval) };
     },
   );
 

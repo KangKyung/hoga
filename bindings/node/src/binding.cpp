@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 
+#include "hoga/candles.hpp"
 #include "hoga/core.hpp"
 #include "hoga/matching_engine.hpp"
 #include "hoga/order.hpp"
@@ -239,6 +240,72 @@ class MatchingEngineWrap : public Napi::ObjectWrap<MatchingEngineWrap> {
   std::optional<hoga::MatchingEngine> engine_;
 };
 
+// ---------- CandleSeries 클래스 ----------
+
+class CandleSeriesWrap : public Napi::ObjectWrap<CandleSeriesWrap> {
+ public:
+  static Napi::Function Define(Napi::Env env) {
+    return DefineClass(env, "CandleSeries",
+                       {
+                           InstanceMethod<&CandleSeriesWrap::AddTrade>("addTrade"),
+                           InstanceMethod<&CandleSeriesWrap::Bars>("bars"),
+                           InstanceAccessor<&CandleSeriesWrap::Version>("version"),
+                       });
+  }
+
+  explicit CandleSeriesWrap(const Napi::CallbackInfo& info) : Napi::ObjectWrap<CandleSeriesWrap>(info) {
+    const auto env = info.Env();
+    std::int64_t interval = 60'000;
+    std::int64_t maxBars = 1'000;
+    if (info[0].IsObject()) {
+      const auto opts = info[0].As<Napi::Object>();
+      if (opts.Has("intervalMs")) interval = requireSafeInt(env, opts.Get("intervalMs"), "intervalMs");
+      if (opts.Has("maxBars")) maxBars = requireSafeInt(env, opts.Get("maxBars"), "maxBars");
+      if (env.IsExceptionPending()) return;
+    }
+    series_.emplace(interval, static_cast<std::size_t>(maxBars < 1 ? 1 : maxBars));
+  }
+
+ private:
+  Napi::Value AddTrade(const Napi::CallbackInfo& info) {
+    const auto env = info.Env();
+    const auto ts = requireSafeInt(env, info[0], "ts");
+    const auto price = requireSafeInt(env, info[1], "price");
+    const auto qty = requireSafeInt(env, info[2], "qty");
+    if (env.IsExceptionPending()) return env.Undefined();
+    series_->addTrade(ts, price, qty);
+    return env.Undefined();
+  }
+
+  // [[start, open, high, low, close, volume], ...] 오래된 것부터
+  Napi::Value Bars(const Napi::CallbackInfo& info) {
+    const auto env = info.Env();
+    const auto limit = info[0].IsUndefined() ? 200 : requireSafeInt(env, info[0], "limit");
+    const auto bucket = info[1].IsUndefined() ? 0 : requireSafeInt(env, info[1], "bucketMs");
+    if (env.IsExceptionPending()) return env.Undefined();
+    const auto bars = series_->bars(static_cast<std::size_t>(limit < 0 ? 0 : limit), bucket);
+    auto arr = Napi::Array::New(env, bars.size());
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+      auto row = Napi::Array::New(env, 6);
+      const auto& c = bars[i];
+      row.Set(0u, num(env, c.start));
+      row.Set(1u, num(env, c.open));
+      row.Set(2u, num(env, c.high));
+      row.Set(3u, num(env, c.low));
+      row.Set(4u, num(env, c.close));
+      row.Set(5u, num(env, c.volume));
+      arr.Set(static_cast<uint32_t>(i), row);
+    }
+    return arr;
+  }
+
+  Napi::Value Version(const Napi::CallbackInfo& info) {
+    return num(info.Env(), static_cast<std::int64_t>(series_->version()));
+  }
+
+  std::optional<hoga::CandleSeries> series_;
+};
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("coreVersion", Napi::Function::New(env, CoreVersion));
   exports.Set("tickSize", Napi::Function::New(env, TickSize));
@@ -246,6 +313,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("priceLimits", Napi::Function::New(env, PriceLimits));
   exports.Set("validateOrder", Napi::Function::New(env, ValidateOrder));
   exports.Set("MatchingEngine", MatchingEngineWrap::Define(env));
+  exports.Set("CandleSeries", CandleSeriesWrap::Define(env));
   return exports;
 }
 

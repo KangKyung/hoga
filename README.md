@@ -12,8 +12,40 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | M0 | 같은 C++ 함수를 C++ · Node · iOS · Android에서 호출 | 완료 |
 | M1 | C++ 호가·재동기화·주문 검증·매칭 엔진 + Node 모의 거래소 서버 | 완료 |
 | M2 | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | 완료 |
-| **M3** | 로그인 · 주문 · 체결 알림 · 보안 저장소 · 기기 보안 신호 | **완료** |
-| M4 | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | 다음 |
+| M3 | 로그인 · 주문 · 체결 알림 · 보안 저장소 · 기기 보안 신호 | 완료 |
+| **M4** | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | **완료** |
+
+### M4 검증 결과 (2026-11-15)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| C++ | `CandleSeries`(1분 봉·과거 병합·5분 집계) · `chart::layout`(보이는 구간·가격 범위·이동평균·격자·거래량·마지막가 선·십자선 인덱스) · `MarketClient`가 과거 봉+실시간 체결로 봉 생성 (코어 68개) | 일반 · ASan · TSan 통과 |
+| Node · 서버 | `CandleSeries` N-API 바인딩 (8개), `GET /candles/:symbol?interval=1m\|5m\|15m` · 과거 봉 생성 · 잘못된 간격 400 (vitest 30개) | 통과 |
+| 앱 | Jest 9개, `tsc` · ESLint | 통과 |
+| iOS | 1분 · 5분 전환, 핀치 확대, 가로 드래그로 과거 보기 | [1분](docs/m4-ios-chart-1m.png) · [5분](docs/m4-ios-chart-5m.png) · [핀치](docs/m4-ios-chart-pinch.png) · [스크롤](docs/m4-ios-chart-scrolled.png) |
+| Android | 1분 · 5분 전환, 길게 누르기 십자선 → `onCrosshair` 이벤트로 JS에 봉 정보 표시, 가로 드래그 | [1분](docs/m4-android-chart-1m.png) · [5분](docs/m4-android-chart-5m.png) · [십자선](docs/m4-android-crosshair.png) |
+
+> Android 캡처는 `FLAG_SECURE` 때문에 `SECURE_SCREEN`(apps/mobile/src/config.ts)을 잠시 끄고 찍었습니다. 저장소에는 켜진 상태로 둡니다.
+
+### M4 차트 설계 — 계산은 C++ 한 벌, 플랫폼은 그리기만
+
+```
+ 체결(웹소켓) ─▶ MarketClient(C++) ─▶ CandleSeries ◀── GET /candles (과거 600봉)
+                                         │
+                       ChartDataSource (weak_ptr, 버전 번호)
+                  ┌──────────────────────┴──────────────────────┐
+     iOS HogaChartComponentView (Fabric)         Android HogaChartView (Fabric, 코드젠 ViewManager)
+     CADisplayLink: 버전 바뀔 때만               Choreographer: 버전 바뀔 때만
+     chart::layout() 직접 호출                   JNI nativeLayout() → double[] 한 번에
+     CoreGraphics로 그리기                       Canvas로 그리기
+```
+
+- **봉 데이터는 JS를 거치지 않습니다.** 네이티브 뷰가 C++ 봉을 직접 읽고, JS는 종목·간격·이동평균 여부만 props로 넘깁니다. 십자선 정보만 이벤트로 JS에 올라갑니다.
+- **배치 계산 공용**: 가격 범위, 격자 간격(호가단위에 맞춘 깔끔한 값), 이동평균, 마지막가 선과 겹치는 눈금 글자 제거까지 `hoga::chart::layout`이 계산하고 단위 테스트로 검증합니다. 두 플랫폼 화면이 같은 값을 보여 줍니다.
+- **다시 그리기는 데이터가 바뀔 때만**: 화면 주기마다 버전 번호만 비교합니다. 버전에는 연결 세대를 섞어 재접속 뒤 같은 번호가 나와도 다시 그립니다.
+- **JNI 왕복 1회**: Android는 한 프레임에 필요한 좌표를 `double[]` 하나로 받아 JNI 경계를 여러 번 넘지 않습니다.
+- **5분·15분 봉은 저장하지 않고 1분 봉을 읽을 때 묶습니다.** 간격을 바꿔도 다시 받지 않습니다.
+- 로그인 수정: Return 키가 마지막 입력 반영보다 먼저 와서 빈 비밀번호가 전송되던 문제를 ref로 고치고, 4xx 응답을 "서버에 연결할 수 없습니다"로 잘못 안내하던 문구를 바로잡았습니다. iOS 재설치 후 Keychain 세션 복원도 확인했습니다.
 
 ### M3 검증 결과 (2026-11-15)
 
@@ -128,15 +160,20 @@ hoga/
 │  │  ├─ order.hpp                # 주문 검증 (앱·서버 공용 규칙)
 │  │  ├─ matching_engine.hpp      # 가격·시간 우선 매칭 엔진
 │  │  ├─ transport.hpp            # 플랫폼 네트워크·타이머 인터페이스
-│  │  └─ market_client.hpp        # 시세 클라이언트 (재연결·구독·재동기화)
+│  │  ├─ market_client.hpp        # 시세 클라이언트 (재연결·구독·재동기화·봉)
+│  │  ├─ candles.hpp              # 1분 봉 + 읽을 때 집계
+│  │  └─ chart_layout.hpp         # 차트 배치 계산 (iOS·Android 공용)
 │  ├─ third_party/nlohmann/       # JSON 파서 (MIT, v3.12.0)
 │  └─ tests/
 ├─ bindings/
 │  ├─ node/                       # N-API 애드온 → 서버가 매칭·검증에 사용
 │  └─ turbomodule/                # RN C++ TurboModule (iOS·Android 공용 구현 1벌)
+│     ├─ ChartDataSource.h        # 네이티브 차트 뷰가 C++ 봉을 읽는 통로
 │     ├─ ios/IosTransport.mm      # URLSession 웹소켓 (Objective-C++)
-│     └─ android/AndroidTransport.cpp  # JNI ↔ Kotlin HogaTransport (OkHttp)
+│     ├─ android/AndroidTransport.cpp  # JNI ↔ Kotlin HogaTransport (OkHttp)
+│     └─ android/ChartBridge.cpp  # JNI: Kotlin 차트 뷰 → chart::layout
 ├─ bindings/platform-modules/ios/ # Objective-C TurboModule: Keychain 보안 저장소 · 기기 보안 신호
+│                                 # HogaChartComponentView.mm: Fabric 차트 (CoreGraphics)
 ├─ server/                        # Node.js 모의 거래소 (TypeScript, Fastify, ws)
 │  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기
 │  ├─ src/gateway/                # WebSocket 팬아웃 (백프레셔·하트비트·제한)
@@ -146,12 +183,15 @@ hoga/
 │  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현, Redis는 M6)
 │  └─ test/
 ├─ apps/mobile/                   # React Native 0.88 앱
-│  ├─ src/screens/                # 관심종목 · 실시간 호가
+│  ├─ specs/                      # 코드젠 스펙 (TurboModule · HogaChartView)
+│  ├─ src/screens/                # 관심종목 · 실시간 호가 · 차트 탭
+│  ├─ src/components/ChartPanel.tsx
 │  ├─ src/hooks/                  # usePolled: C++에서 화면 주기로 끌어오기
 │  ├─ src/orders/                 # 주문 상태 머신 · 미확정 주문 기록 · 내 주문
 │  ├─ src/auth/session.ts         # 로그인 · 토큰 회전 · 생체 잠금
 │  ├─ android/.../transport/HogaTransport.kt
-│  └─ android/.../security/       # Kotlin SecureStoreModule · Java DeviceGuardModule
+│  ├─ android/.../security/       # Kotlin SecureStoreModule · Java DeviceGuardModule
+│  └─ android/.../chart/          # Kotlin HogaChartView (Canvas) · ViewManager · JNI 선언
 └─ HogaNative.podspec             # iOS: core + turbomodule 소스를 컴파일
 ```
 
@@ -181,6 +221,7 @@ npm test
 | `GET /healthz`, `/readyz`, `/metrics` | 상태 · Prometheus 지표 |
 | `GET /symbols` | 모의 종목 목록 (기준가, 호가단위, 상·하한가) |
 | `GET /book/:symbol?depth=20` | 스냅샷 (재동기화용) |
+| `GET /candles/:symbol?interval=1m&limit=600` | 과거 봉 `[[start, o, h, l, c, v]]` (1m · 5m · 15m) |
 | `POST /auth/login`, `/auth/refresh`, `/auth/logout` | 로그인 · 토큰 회전 · 로그아웃 |
 | `GET /orders?symbol=` | 내 주문 목록 (Bearer 토큰 필요, 아래 주문 API 모두 동일) |
 | `POST /orders` | 주문. `Idempotency-Key` 헤더 필수(사용자별로 분리) |
@@ -288,5 +329,7 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용). 재연결 후에도 이전 체결 목록은 그대로 보입니다.
 - 앱의 서버 주소는 `localhost:8080`으로 고정입니다(시뮬레이터·에뮬레이터 개발용).
 - 인증서 고정·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
-- 차트는 M4(Fabric 네이티브 뷰)에서 만듭니다.
-- 다음: **M4** — Fabric 네이티브 캔들 차트(iOS Obj-C++ + CoreGraphics / Android Kotlin Canvas, C++ 캔들 집계를 직접 읽기).
+- 차트: 서버의 과거 봉은 시작할 때 만든 모의 데이터이고 서버 메모리에만 있습니다. 앱은 연결할 때 600봉만 받습니다(더 과거로 스크롤해도 추가로 받지 않음).
+- 차트: Android 핀치 확대는 코드로 넣었지만 adb로는 두 손가락 입력을 만들 수 없어 **에뮬레이터에서 확인하지 못했습니다**(iOS에서는 확인). 차트 접근성(VoiceOver·TalkBack 요약)은 아직 없습니다.
+- 차트: 체결이 없는 분에는 봉이 생기지 않습니다(빈 봉 채우기 없음).
+- 다음: **M5** — 웹뷰(종목정보 HTML·공지 AngularJS) + 브리지, AngularJS 관리 콘솔, 분석 이벤트 분류표, 현지화.

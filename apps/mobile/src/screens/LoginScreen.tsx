@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {ActivityIndicator, Pressable, StyleSheet, Switch, Text, TextInput, View} from 'react-native';
 
 import {session, type SessionState} from '../auth/session';
@@ -16,6 +16,25 @@ const BIOMETRY_LABEL: Record<BiometryType, string> = {
 export function LoginScreen({state}: {state: Extract<SessionState, {status: 'signedOut' | 'locked'}>}) {
   const [username, setUsername] = useState('demo');
   const [password, setPassword] = useState('');
+  // Return 키(onSubmitEditing)는 마지막 입력의 onChangeText·재렌더보다 먼저 올 수 있다.
+  // 렌더 시점 값을 쓰면 빈 비밀번호가 전송되므로, 입력 즉시 갱신되는 ref와
+  // Return 이벤트가 실어 오는 네이티브 입력값(nativeEvent.text)을 쓴다.
+  const latest = useRef({username: 'demo', password: ''});
+  const onUsername = (v: string) => {
+    latest.current.username = v;
+    setUsername(v);
+  };
+  const onPassword = (v: string) => {
+    latest.current.password = v;
+    setPassword(v);
+  };
+  const submit = (override?: {password?: string}) => {
+    // iOS 보안 입력란은 Return 이벤트에 빈 문자열을 실어 올 수 있으니, 값이 있을 때만 쓴다
+    if (override?.password) latest.current.password = override.password;
+    const {username: u, password: pw} = latest.current;
+    if (!u || !pw) return;
+    run(() => session.login(u, pw, enableLock));
+  };
   const [busy, setBusy] = useState(false);
   const [biometry, setBiometry] = useState<BiometryType>('none');
   const [enableLock, setEnableLock] = useState(false);
@@ -59,7 +78,7 @@ export function LoginScreen({state}: {state: Extract<SessionState, {status: 'sig
         testID="username"
         style={styles.input}
         value={username}
-        onChangeText={setUsername}
+        onChangeText={onUsername}
         autoCapitalize="none"
         autoCorrect={false}
         placeholder="아이디"
@@ -69,11 +88,11 @@ export function LoginScreen({state}: {state: Extract<SessionState, {status: 'sig
         testID="password"
         style={styles.input}
         value={password}
-        onChangeText={setPassword}
+        onChangeText={onPassword}
         secureTextEntry
         placeholder="비밀번호"
         textContentType="password"
-        onSubmitEditing={() => run(() => session.login(username, password, enableLock))}
+        onSubmitEditing={e => submit({password: e.nativeEvent.text})}
       />
       {biometry !== 'none' ? (
         <View style={styles.row}>
@@ -87,7 +106,7 @@ export function LoginScreen({state}: {state: Extract<SessionState, {status: 'sig
         testID="login"
         style={[styles.primary, (!username || !password) && styles.disabled]}
         disabled={!username || !password || busy}
-        onPress={() => run(() => session.login(username, password, enableLock))}>
+        onPress={() => submit()}>
         {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>로그인</Text>}
       </Pressable>
       <Text style={styles.hint}>개발용: demo / hoga-demo-1234</Text>

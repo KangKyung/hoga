@@ -151,6 +151,49 @@ void MarketClient::connectLocked(Deferred& /*after*/) {
   transport_->connect(options_.wsUrl, std::move(callbacks));
 }
 
+MarketClient::SymbolData& MarketClient::ensureSymbolLocked(const std::string& symbol) {
+  auto [it, inserted] = symbols_.try_emplace(symbol);
+  if (inserted) {
+    it->second.candles = std::make_unique<CandleSeries>(options_.candleIntervalMs, options_.candleHistory);
+  }
+  return it->second;
+}
+
+void MarketClient::requestCandlesLocked(const std::string& symbol) {
+  auto it = symbols_.find(symbol);
+  if (it == symbols_.end() || it->second.candlesInFlight) return;
+  it->second.candlesInFlight = true;
+  const auto url = options_.httpBaseUrl + "/candles/" + escapeSymbol(symbol) +
+                   "?limit=" + std::to_string(options_.candleHistory);
+  std::weak_ptr<MarketClient> weak = weak_from_this();
+  transport_->httpGet(url, [weak, symbol](int status, std::string body) {
+    if (auto self = weak.lock()) self->onCandlesResponse(symbol, status, body);
+  });
+}
+
+void MarketClient::onCandlesResponse(const std::string& symbol, int status, const std::string& body) {
+  std::lock_guard lock(mutex_);
+  auto it = symbols_.find(symbol);
+  if (it == symbols_.end()) return;
+  it->second.candlesInFlight = false;
+  if (status != 200) return;  // 과거 봉이 없어도 실시간 봉은 계속 쌓인다
+  const auto msg = json::parse(body, nullptr, false);
+  if (msg.is_discarded() || !msg.is_object() || !msg.contains("bars") || !msg["bars"].is_array()) {
+    ++stats_.parseErrors;
+    return;
+  }
+  std::vector<Candle> history;
+  for (const auto& b : msg["bars"]) {
+    if (!b.is_array() || b.size() != 6) continue;
+    bool ok = true;
+    for (const auto& v : b) ok = ok && v.is_number_integer();
+    if (!ok) continue;
+    history.push_back({b[0].get<std::int64_t>(), b[1].get<Price>(), b[2].get<Price>(), b[3].get<Price>(),
+                       b[4].get<Price>(), b[5].get<Qty>()});
+  }
+  it->second.candles->mergeHistory(history);
+}
+
 void MarketClient::sendOpLocked(const char* op, const std::vector<std::string>& symbols) {
   if (symbols.empty() || state_ != ConnectionState::Open) return;
   json msg{{"op", op}, {"symbols", symbols}};
@@ -190,9 +233,12 @@ void MarketClient::onOpen(std::uint64_t generation) {
     for (auto& [symbol, data] : symbols_) {
       data.sync->reset();
       data.snapshotInFlight = false;
+      data.candlesInFlight = false;
       all.push_back(symbol);
     }
     sendOpLocked("sub", all);
+    // 끊긴 동안 놓친 체결은 봉으로 다시 받는다
+    for (const auto& symbol : all) requestCandlesLocked(symbol);
   }
   run(after);
 }
@@ -288,6 +334,8 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
                               msg.at("aggr").get<std::string>() == "B" ? Side::Bid : Side::Ask,
                               msg.value("ts", std::int64_t{0})});
       while (data.trades.size() > options_.tradeHistory) data.trades.pop_back();
+      const auto& t = data.trades.front();
+      data.candles->addTrade(t.ts, t.price, t.qty);
     }
   } catch (const json::exception&) {
     // 필드가 없거나 타입이 틀린 메시지. 연결은 유지하고 버린다.
@@ -351,9 +399,15 @@ void MarketClient::subscribe(const std::vector<std::string>& symbols) {
   std::lock_guard lock(mutex_);
   std::vector<std::string> added;
   for (const auto& symbol : symbols) {
-    if (symbols_.try_emplace(symbol).second) added.push_back(symbol);
+    if (symbols_.find(symbol) == symbols_.end()) {
+      ensureSymbolLocked(symbol);
+      added.push_back(symbol);
+    }
   }
   sendOpLocked("sub", added);
+  if (state_ == ConnectionState::Open) {
+    for (const auto& symbol : added) requestCandlesLocked(symbol);
+  }
 }
 
 void MarketClient::unsubscribe(const std::vector<std::string>& symbols) {
@@ -387,6 +441,19 @@ std::vector<Trade> MarketClient::trades(const std::string& symbol, std::size_t l
   if (it == symbols_.end()) return {};
   const auto& list = it->second.trades;
   return {list.begin(), list.begin() + static_cast<std::ptrdiff_t>(std::min(limit, list.size()))};
+}
+
+std::vector<Candle> MarketClient::candles(const std::string& symbol, std::int64_t bucketMs, std::size_t limit) const {
+  std::lock_guard lock(mutex_);
+  auto it = symbols_.find(symbol);
+  if (it == symbols_.end()) return {};
+  return it->second.candles->bars(limit, bucketMs);
+}
+
+std::uint64_t MarketClient::candleVersion(const std::string& symbol) const {
+  std::lock_guard lock(mutex_);
+  auto it = symbols_.find(symbol);
+  return it == symbols_.end() ? 0 : it->second.candles->version();
 }
 
 ClientStats MarketClient::stats() const {

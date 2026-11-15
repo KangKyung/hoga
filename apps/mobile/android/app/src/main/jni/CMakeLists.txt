@@ -12,6 +12,8 @@ add_subdirectory(${HOGA_ROOT}/core ${CMAKE_CURRENT_BINARY_DIR}/hoga_core)
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   ${HOGA_ROOT}/bindings/turbomodule/NativeHogaCore.cpp
-  ${HOGA_ROOT}/bindings/turbomodule/android/AndroidTransport.cpp)
+  ${HOGA_ROOT}/bindings/turbomodule/ChartDataSource.cpp
+  ${HOGA_ROOT}/bindings/turbomodule/android/AndroidTransport.cpp
+  ${HOGA_ROOT}/bindings/turbomodule/android/ChartBridge.cpp)
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${HOGA_ROOT}/bindings/turbomodule)
 target_link_libraries(${CMAKE_PROJECT_NAME} hoga_core)

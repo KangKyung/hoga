@@ -2,6 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import type {SymbolInfo} from '../api/symbols';
+import {ChartPanel} from '../components/ChartPanel';
 import {MyOrders} from '../components/MyOrders';
 import {StatusBadge} from '../components/StatusBadge';
 import {useBook, useConnectionState, useStats, useTrades} from '../hooks/market';
@@ -25,6 +26,7 @@ export function QuoteScreen({symbol, onBack}: Props) {
 
   const lastPrice = trades[0]?.price ?? symbol.lastPrice;
   const [order, setOrder] = useState<{side: Side; price: number} | null>(null);
+  const [tab, setTab] = useState<'book' | 'chart'>('book');
   // 호가를 누르면 그 가격으로 주문: 매도 호가 → 매수, 매수 호가 → 매도
   const openOrder = (side: Side, price: number) => setOrder({side, price});
   const priceTint = priceColor(lastPrice, symbol.basePrice);
@@ -65,8 +67,17 @@ export function QuoteScreen({symbol, onBack}: Props) {
         <Text style={[styles.change, mono, {color: priceTint}]}>{formatChange(lastPrice, symbol.basePrice)}</Text>
       </View>
 
+      <View style={styles.tabs}>
+        {(['book', 'chart'] as const).map(t => (
+          <Pressable key={t} testID={`tab-${t}`} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabActive]}>
+            <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>{t === 'book' ? '호가' : '차트'}</Text>
+          </Pressable>
+        ))}
+      </View>
+
       <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.card}>
+        {tab === 'chart' ? <ChartPanel symbol={symbol.code} /> : null}
+        <View style={[styles.card, tab === 'chart' && styles.hidden]}>
           <View style={styles.bookHeader}>
             <Text style={[styles.bookHeaderText, {color: colors.down}]}>매도잔량</Text>
             <Text style={styles.bookHeaderText}>호가</Text>
@@ -230,6 +241,12 @@ const styles = StyleSheet.create({
   tradeText: {flex: 1, fontSize: 13, color: colors.text},
   tradeQty: {textAlign: 'right'},
   stats: {textAlign: 'center', fontSize: 11, color: colors.mute},
+  tabs: {flexDirection: 'row', marginHorizontal: 16, marginBottom: 10, backgroundColor: colors.card, borderRadius: 10, padding: 3},
+  tab: {flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: 8},
+  tabActive: {backgroundColor: colors.accent},
+  tabText: {fontWeight: '600', color: colors.sub},
+  tabTextActive: {color: '#fff'},
+  hidden: {display: 'none'},
   actions: {flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24, backgroundColor: colors.bg},
   action: {flex: 1, borderRadius: 10, paddingVertical: 14, alignItems: 'center'},
   actionText: {color: '#fff', fontSize: 16, fontWeight: '700'},

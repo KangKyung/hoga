@@ -100,6 +100,8 @@ class SessionManager {
         this.set({status: 'signedOut', message: '로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.'});
       } else if (e instanceof HttpError && e.status === 401) {
         this.set({status: 'signedOut', message: '아이디 또는 비밀번호가 맞지 않습니다.'});
+      } else if (e instanceof HttpError && e.status < 500) {
+        this.set({status: 'signedOut', message: '입력값을 확인해 주세요.'});
       } else if (secureStoreErrorCode(e)) {
         // 로그인은 됐지만 생체 잠금 설정을 취소·실패 → 잠금 없이 계속
         return;

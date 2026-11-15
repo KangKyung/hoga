@@ -7,6 +7,8 @@ const schema = z.object({
 
   /** 모의 주문 발생기(종목마다 이 주기로 주문을 넣는다). 0이면 끔 */
   SIM_INTERVAL_MS: z.coerce.number().int().min(0).default(100),
+  /** 시작할 때 채울 과거 1분 봉 수(모의 데이터) */
+  HISTORY_MINUTES: z.coerce.number().int().min(0).max(2_000).default(240),
 
   // ---- 장애 주입 (앱의 복구 동작을 시연하기 위한 옵션) ----
   /** 이 확률로 시세 변경분을 일부러 빠뜨린다(seq는 증가) → 클라이언트 재동기화 유도 */

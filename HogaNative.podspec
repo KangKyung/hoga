@@ -20,7 +20,7 @@ Pod::Spec.new do |s|
     "bindings/platform-modules/ios/*.{h,m,mm}",
   ]
   # 보안 저장소(Keychain·생체 인증)와 기기 보안 신호
-  s.frameworks   = "Security", "LocalAuthentication", "UIKit"
+  s.frameworks   = "Security", "LocalAuthentication", "UIKit", "QuartzCore"
   s.private_header_files = "core/include/**/*.hpp", "bindings/turbomodule/*.h"
 
   s.pod_target_xcconfig = {

@@ -1,9 +1,11 @@
 import type { Bus } from '../bus.js';
 import {
+  CandleSeries,
   MatchingEngine,
   priceLimits,
   roundToTick,
   tickSize,
+  type CandleRow,
   type ExecutionResult,
   type OrderRequest,
 } from '../core.js';
@@ -17,6 +19,8 @@ export interface MarketOptions {
   random?: () => number;
   now?: () => number;
   symbols?: readonly SymbolInfo[];
+  /** 시작 시 채워 넣을 과거 1분 봉 개수(모의 데이터). 0이면 없음 */
+  historyMinutes?: number;
 }
 
 interface SymbolState {
@@ -24,7 +28,10 @@ interface SymbolState {
   engine: InstanceType<typeof MatchingEngine>;
   seq: number;
   botOrders: number[];
+  candles: InstanceType<typeof CandleSeries>;
 }
+
+const MINUTE = 60_000;
 
 const MAX_BOT_ORDERS = 300;
 
@@ -53,12 +60,15 @@ export class Market {
     this.random = options.random ?? Math.random;
     this.now = options.now ?? Date.now;
     for (const info of options.symbols ?? SYMBOLS) {
-      this.states.set(info.code, {
+      const state: SymbolState = {
         info,
         engine: new MatchingEngine({ basePrice: info.basePrice }),
         seq: 0,
         botOrders: [],
-      });
+        candles: new CandleSeries({ intervalMs: MINUTE, maxBars: 2_000 }),
+      };
+      this.backfill(state, options.historyMinutes ?? 0);
+      this.states.set(info.code, state);
     }
     metrics.describe('hoga_market_deltas_total', 'counter', 'Book deltas published');
     metrics.describe('hoga_market_deltas_dropped_total', 'counter', 'Book deltas skipped by fault injection');
@@ -94,6 +104,11 @@ export class Market {
       bids: state.engine.depth('bid', depth).map((l) => [l.price, l.qty]),
       asks: state.engine.depth('ask', depth).map((l) => [l.price, l.qty]),
     };
+  }
+
+  /** 1분 봉(오래된 것부터). bucketMs가 1분의 배수면 묶어서 */
+  candles(symbol: string, limit: number, bucketMs = 0): CandleRow[] {
+    return this.require(symbol).candles.bars(limit, bucketMs);
   }
 
   submit(symbol: string, order: OrderRequest): ExecutionResult {
@@ -155,6 +170,7 @@ export class Market {
       this.bus.publish(sym, 'book', JSON.stringify(msg));
       this.metrics.inc('hoga_market_deltas_total', { sym });
     }
+    for (const fill of result.fills) state.candles.addTrade(this.now(), fill.price, fill.qty);
     if (takerSide) {
       for (const fill of result.fills) {
         const msg: TradeMessage = {
@@ -167,6 +183,41 @@ export class Market {
         };
         this.bus.publish(sym, 'trade', JSON.stringify(msg));
         this.metrics.inc('hoga_market_trades_total', { sym });
+      }
+    }
+  }
+
+  /**
+   * 차트가 처음부터 비어 있지 않도록 과거 체결을 모의로 만든다.
+   * 기준가에서 거꾸로 무작위 보행해 지금 가격이 기준가 근처가 되게 하고, 호가단위·가격제한폭을 지킨다.
+   */
+  private backfill(state: SymbolState, minutes: number): void {
+    if (minutes <= 0) return;
+    const { basePrice } = state.info;
+    const band = priceLimits(basePrice);
+    const clamp = (p: number) =>
+      roundToTick(Math.round(Math.min(band.upper, Math.max(band.lower, p))), 'down') || band.lower;
+    const nowBucket = Math.floor(this.now() / MINUTE) * MINUTE;
+
+    const closes: number[] = [];
+    let price = basePrice;
+    for (let i = 0; i < minutes; i++) {
+      closes.push(price);
+      const drift = (this.random() - 0.5) * 6 * tickSize(price);
+      price = clamp(price - drift);
+    }
+    closes.reverse();
+    for (let i = 0; i < minutes; i++) {
+      const start = nowBucket - (minutes - i) * MINUTE;
+      const open = i === 0 ? closes[0]! : closes[i - 1]!;
+      const close = closes[i]!;
+      const tick = tickSize(close);
+      const high = clamp(Math.max(open, close) + Math.floor(this.random() * 3) * tick);
+      const low = clamp(Math.min(open, close) - Math.floor(this.random() * 3) * tick);
+      // 실시간 모의 체결과 비슷한 규모(분당 수만 주)가 되도록
+      const volume = () => (5 + Math.floor(this.random() * 40)) * 250;
+      for (const [offset, px] of [[1_000, open], [20_000, high], [40_000, low], [59_000, close]] as const) {
+        state.candles.addTrade(start + offset, px, volume());
       }
     }
   }

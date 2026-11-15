@@ -73,3 +73,15 @@ export class MatchingEngine {
   readonly lastPrice: number | null;
   readonly restingOrderCount: number;
 }
+
+/** [start(epoch ms), open, high, low, close, volume] */
+export type CandleRow = [number, number, number, number, number, number];
+
+/** 체결 → 봉 집계(C++). 앱의 실시간 봉과 같은 코드 */
+export class CandleSeries {
+  constructor(options?: { intervalMs?: number; maxBars?: number });
+  addTrade(ts: number, price: number, qty: number): void;
+  /** 최근 limit개, 오래된 것부터. bucketMs가 기본 구간의 배수면 묶어서 돌려준다 */
+  bars(limit?: number, bucketMs?: number): CandleRow[];
+  readonly version: number;
+}

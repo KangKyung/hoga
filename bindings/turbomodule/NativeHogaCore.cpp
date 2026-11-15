@@ -6,6 +6,7 @@
 #include <random>
 #include <vector>
 
+#include "ChartDataSource.h"
 #include "PlatformTransport.h"
 #include "hoga/core.hpp"
 #include "hoga/order.hpp"
@@ -147,6 +148,7 @@ void NativeHogaCore::connect(jsi::Runtime& rt, jsi::String wsUrl, jsi::String ht
     });
   });
   if (!authToken_.empty()) client_->setAuthToken(authToken_);
+  hoga::chartsource::setClient(client_);  // 네이티브 차트가 직접 읽는다
   client_->start();
 }
 
@@ -154,6 +156,7 @@ void NativeHogaCore::disconnect(jsi::Runtime& /*rt*/) {
   if (client_) {
     client_->stop();
     client_.reset();
+    hoga::chartsource::setClient(nullptr);
   }
 }
 

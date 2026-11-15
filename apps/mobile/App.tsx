@@ -9,7 +9,7 @@ import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 
 import {fetchSymbols, type SymbolInfo} from './src/api/symbols';
 import {session, useSession} from './src/auth/session';
-import {SERVER} from './src/config';
+import {SECURE_SCREEN, SERVER} from './src/config';
 import {hogaCore, type OrderEvent} from './src/native/hogaCore';
 import {deviceGuard} from './src/native/security';
 import {orderService} from './src/orders/orderService';
@@ -116,7 +116,7 @@ function App(): React.JSX.Element {
   useEffect(() => {
     // 시세는 로그인과 무관하게 연결, 로그인하면 세션이 토큰을 넘겨 주문 알림까지 받는다
     hogaCore.connect(SERVER.ws, SERVER.http);
-    deviceGuard.setSecureScreen(true); // 잔고·주문 화면이 캡처·앱 전환기에 남지 않게
+    deviceGuard.setSecureScreen(SECURE_SCREEN); // 잔고·주문 화면이 캡처·앱 전환기에 남지 않게
     session.restore();
     return () => hogaCore.disconnect();
   }, []);
