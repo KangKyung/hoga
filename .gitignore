@@ -3,3 +3,4 @@ daou_mts/
 **/build/
 node_modules/
 .claude/
+core/build-*/
