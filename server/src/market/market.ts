@@ -28,6 +28,8 @@ interface SymbolState {
 
 const MAX_BOT_ORDERS = 300;
 
+export type ExecutionListener = (symbol: string, result: ExecutionResult) => void;
+
 /**
  * 시세의 단일 작성자(single writer).
  *
@@ -37,6 +39,7 @@ const MAX_BOT_ORDERS = 300;
  */
 export class Market {
   private readonly states = new Map<string, SymbolState>();
+  private readonly listeners = new Set<ExecutionListener>();
   private readonly dropSeqRate: number;
   private readonly random: () => number;
   private readonly now: () => number;
@@ -60,6 +63,12 @@ export class Market {
     metrics.describe('hoga_market_deltas_total', 'counter', 'Book deltas published');
     metrics.describe('hoga_market_deltas_dropped_total', 'counter', 'Book deltas skipped by fault injection');
     metrics.describe('hoga_market_trades_total', 'counter', 'Trades executed');
+  }
+
+  /** 체결·취소가 일어날 때마다 호출(주문 추적용) */
+  onExecution(listener: ExecutionListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   has(symbol: string): boolean {
@@ -91,6 +100,7 @@ export class Market {
     const state = this.require(symbol);
     const result = state.engine.submit(order);
     this.publish(state, result, order.side);
+    for (const listener of this.listeners) listener(symbol, result);
     return result;
   }
 
@@ -98,6 +108,7 @@ export class Market {
     const state = this.require(symbol);
     const result = state.engine.cancel(orderId);
     this.publish(state, result, null);
+    for (const listener of this.listeners) listener(symbol, result);
     return result;
   }
 

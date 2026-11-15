@@ -19,8 +19,13 @@ class NativeHogaCore : public NativeHogaCoreCxxSpec<NativeHogaCore> {
   std::string coreVersion(jsi::Runtime& rt);
   double tickSize(jsi::Runtime& rt, double price);
   double roundToTick(jsi::Runtime& rt, double price, jsi::String mode);
+  jsi::Object priceLimits(jsi::Runtime& rt, double basePrice);
+  std::string validateOrder(jsi::Runtime& rt, jsi::String side, jsi::String type, double price, double qty,
+                            double basePrice);
+  std::string randomId(jsi::Runtime& rt);
 
   void connect(jsi::Runtime& rt, jsi::String wsUrl, jsi::String httpBaseUrl);
+  void setAuthToken(jsi::Runtime& rt, jsi::String token);
   void disconnect(jsi::Runtime& rt);
   void subscribe(jsi::Runtime& rt, jsi::Array symbols);
   void unsubscribe(jsi::Runtime& rt, jsi::Array symbols);
@@ -31,6 +36,7 @@ class NativeHogaCore : public NativeHogaCoreCxxSpec<NativeHogaCore> {
 
  private:
   std::shared_ptr<hoga::MarketClient> client_;
+  std::string authToken_;
   // 모듈이 살아 있는 동안만 유효한 표식. 다른 스레드의 콜백은 JS 스레드로 넘어온 뒤 이것을 확인한다.
   std::shared_ptr<int> alive_ = std::make_shared<int>(0);
 };

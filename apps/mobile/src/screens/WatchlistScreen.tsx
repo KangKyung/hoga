@@ -2,23 +2,33 @@ import React from 'react';
 import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
 import type {SymbolInfo} from '../api/symbols';
+import {session} from '../auth/session';
 import {StatusBadge} from '../components/StatusBadge';
+import {deviceGuard} from '../native/security';
 import {useBook, useConnectionState, useTrades} from '../hooks/market';
 import {colors, formatChange, formatPrice, mono, priceColor} from '../theme';
 
 interface Props {
+  userName: string;
   symbols: SymbolInfo[];
   error: string | null;
   onSelect: (symbol: SymbolInfo) => void;
 }
 
-export function WatchlistScreen({symbols, error, onSelect}: Props) {
+export function WatchlistScreen({userName, symbols, error, onSelect}: Props) {
   const connection = useConnectionState();
+  const security = deviceGuard.status();
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>관심종목</Text>
         <StatusBadge connection={connection} sync="live" />
+      </View>
+      <View style={styles.userRow}>
+        <Text style={styles.user}>{userName}님</Text>
+        <Pressable testID="logout" onPress={() => session.logout()} hitSlop={8}>
+          <Text style={styles.logout}>로그아웃</Text>
+        </Pressable>
       </View>
       {error ? <Text style={styles.error}>서버에 연결할 수 없습니다 · {error}</Text> : null}
       <FlatList
@@ -28,6 +38,13 @@ export function WatchlistScreen({symbols, error, onSelect}: Props) {
         ItemSeparatorComponent={Separator}
         contentContainerStyle={styles.list}
       />
+      <Text testID="securitySignal" style={[styles.footnote, security.compromised && styles.warning]}>
+        {security.compromised
+          ? `보안 경고: ${security.reasons.join(', ')} (서버에서 거래가 제한될 수 있습니다)`
+          : security.emulator
+            ? '보안 신호: 에뮬레이터/시뮬레이터(개발 환경)'
+            : '보안 신호: 이상 없음'}
+      </Text>
       <Text style={styles.footnote}>모의 데이터 · 실제 종목과 무관합니다</Text>
     </View>
   );
@@ -79,5 +96,9 @@ const styles = StyleSheet.create({
   priceCol: {alignItems: 'flex-end'},
   price: {fontSize: 17, fontWeight: '700'},
   change: {fontSize: 12, marginTop: 2},
-  footnote: {textAlign: 'center', color: colors.mute, fontSize: 11, marginVertical: 12},
+  footnote: {textAlign: 'center', color: colors.mute, fontSize: 11, marginTop: 8, marginBottom: 4},
+  warning: {color: colors.danger},
+  userRow: {flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8},
+  user: {color: colors.sub},
+  logout: {color: colors.accent},
 });

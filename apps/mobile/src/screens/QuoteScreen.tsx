@@ -1,11 +1,14 @@
-import React, {useEffect, useMemo, useRef} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import type {SymbolInfo} from '../api/symbols';
+import {MyOrders} from '../components/MyOrders';
 import {StatusBadge} from '../components/StatusBadge';
 import {useBook, useConnectionState, useStats, useTrades} from '../hooks/market';
 import type {Level, Trade} from '../native/hogaCore';
+import type {Side} from '../orders/types';
 import {colors, formatChange, formatPrice, mono, priceColor} from '../theme';
+import {OrderSheet} from './OrderSheet';
 
 const DEPTH = 10;
 
@@ -21,6 +24,9 @@ export function QuoteScreen({symbol, onBack}: Props) {
   const stats = useStats();
 
   const lastPrice = trades[0]?.price ?? symbol.lastPrice;
+  const [order, setOrder] = useState<{side: Side; price: number} | null>(null);
+  // 호가를 누르면 그 가격으로 주문: 매도 호가 → 매수, 매수 호가 → 매도
+  const openOrder = (side: Side, price: number) => setOrder({side, price});
   const priceTint = priceColor(lastPrice, symbol.basePrice);
 
   // 직전 화면과 잔량이 달라진 가격대만 잠깐 강조한다.
@@ -75,6 +81,7 @@ export function QuoteScreen({symbol, onBack}: Props) {
               base={symbol.basePrice}
               flash={changed.has(level[0])}
               current={level[0] === lastPrice}
+              onPress={() => openOrder('bid', level[0])}
             />
           ))}
           <View style={styles.mid} />
@@ -87,12 +94,15 @@ export function QuoteScreen({symbol, onBack}: Props) {
               base={symbol.basePrice}
               flash={changed.has(level[0])}
               current={level[0] === lastPrice}
+              onPress={() => openOrder('ask', level[0])}
             />
           ))}
           {book.bids.length + book.asks.length === 0 ? (
             <Text style={styles.empty}>호가를 불러오는 중…</Text>
           ) : null}
         </View>
+
+        <MyOrders symbol={symbol.code} />
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>체결</Text>
@@ -106,6 +116,25 @@ export function QuoteScreen({symbol, onBack}: Props) {
           seq {book.seq} · 누락 감지 {stats.gaps} · 재동기화 {stats.resyncs} · 재연결 {stats.reconnects}
         </Text>
       </ScrollView>
+
+      <View style={styles.actions}>
+        <Pressable
+          testID="sellButton"
+          style={[styles.action, {backgroundColor: colors.down}]}
+          onPress={() => openOrder('ask', book.bids[0]?.[0] ?? lastPrice)}>
+          <Text style={styles.actionText}>매도</Text>
+        </Pressable>
+        <Pressable
+          testID="buyButton"
+          style={[styles.action, {backgroundColor: colors.up}]}
+          onPress={() => openOrder('bid', book.asks[0]?.[0] ?? lastPrice)}>
+          <Text style={styles.actionText}>매수</Text>
+        </Pressable>
+      </View>
+
+      {order ? (
+        <OrderSheet symbol={symbol} initialSide={order.side} initialPrice={order.price} onClose={() => setOrder(null)} />
+      ) : null}
     </View>
   );
 }
@@ -117,14 +146,16 @@ function BookRow(props: {
   base: number;
   flash: boolean;
   current: boolean;
+  onPress: () => void;
 }) {
-  const {side, level, maxQty, base, flash, current} = props;
+  const {side, level, maxQty, base, flash, current, onPress} = props;
   const [price, qty] = level;
   const width = `${Math.max(2, (qty / maxQty) * 100)}%` as const;
   const isAsk = side === 'ask';
   return (
-    <View
+    <Pressable
       testID={`${side}-${price}`}
+      onPress={onPress}
       style={[styles.row, {backgroundColor: isAsk ? colors.downSoft : colors.upSoft}, flash && styles.flash]}>
       <View style={styles.qtyCell}>
         {isAsk ? (
@@ -145,7 +176,7 @@ function BookRow(props: {
           </>
         ) : null}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -199,4 +230,7 @@ const styles = StyleSheet.create({
   tradeText: {flex: 1, fontSize: 13, color: colors.text},
   tradeQty: {textAlign: 'right'},
   stats: {textAlign: 'center', fontSize: 11, color: colors.mute},
+  actions: {flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24, backgroundColor: colors.bg},
+  action: {flex: 1, borderRadius: 10, paddingVertical: 14, alignItems: 'center'},
+  actionText: {color: '#fff', fontSize: 16, fontWeight: '700'},
 });

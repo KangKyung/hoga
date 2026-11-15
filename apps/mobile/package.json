@@ -48,7 +48,9 @@
     },
     "ios": {
       "modulesProvider": {
-        "NativeHogaCore": "HogaCoreModuleProvider"
+        "NativeHogaCore": "HogaCoreModuleProvider",
+        "NativeSecureStore": "HogaSecureStore",
+        "NativeDeviceGuard": "HogaDeviceGuard"
       }
     }
   }

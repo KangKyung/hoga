@@ -18,8 +18,16 @@ export interface Spec extends TurboModule {
   readonly tickSize: (price: number) => number;
   /** 'up' | 'down' */
   readonly roundToTick: (price: number, mode: string) => number;
+  /** 상·하한가 { lower, upper } */
+  readonly priceLimits: (basePrice: number) => CodegenTypes.UnsafeObject;
+  /** 서버와 같은 C++ 규칙으로 주문 검증. 'NONE'이면 통과, 아니면 'OFF_TICK' 같은 거부 사유 */
+  readonly validateOrder: (side: string, type: string, price: number, qty: number, basePrice: number) => string;
+  /** 주문 멱등 키용 UUID v4 (C++ std::random_device) */
+  readonly randomId: () => string;
 
   readonly connect: (wsUrl: string, httpBaseUrl: string) => void;
+  /** 로그인 후 액세스 토큰. 연결될 때마다 서버에 인증해 내 주문 알림을 받는다. 빈 문자열이면 해제 */
+  readonly setAuthToken: (token: string) => void;
   readonly disconnect: () => void;
   readonly subscribe: (symbols: ReadonlyArray<string>) => void;
   readonly unsubscribe: (symbols: ReadonlyArray<string>) => void;
@@ -33,6 +41,8 @@ export interface Spec extends TurboModule {
 
   /** 연결 상태 변경: 'connecting' | 'open' | 'reconnecting' | 'stopped' */
   readonly onConnectionState: CodegenTypes.EventEmitter<string>;
+  /** 내 주문 상태 변화(JSON 문자열). 빈도가 낮아 push로 받는다 */
+  readonly onOrderEvent: CodegenTypes.EventEmitter<string>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('NativeHogaCore');

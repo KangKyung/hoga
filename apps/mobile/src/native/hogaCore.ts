@@ -44,6 +44,12 @@ export const hogaCore = {
   coreVersion: () => NativeHogaCore.coreVersion(),
   tickSize: (price: number) => NativeHogaCore.tickSize(price),
   roundToTick: (price: number, mode: 'up' | 'down') => NativeHogaCore.roundToTick(price, mode),
+  priceLimits: (basePrice: number) => NativeHogaCore.priceLimits(basePrice) as unknown as {lower: number; upper: number},
+  /** 'NONE'이면 통과. 서버와 같은 C++ 규칙 */
+  validateOrder: (side: 'bid' | 'ask', type: 'limit' | 'market', price: number, qty: number, basePrice: number) =>
+    NativeHogaCore.validateOrder(side, type, price, qty, basePrice),
+  randomId: () => NativeHogaCore.randomId(),
+  setAuthToken: (token: string) => NativeHogaCore.setAuthToken(token),
 
   connect: (wsUrl: string, httpBaseUrl: string) => NativeHogaCore.connect(wsUrl, httpBaseUrl),
   disconnect: () => NativeHogaCore.disconnect(),
@@ -59,4 +65,29 @@ export const hogaCore = {
 
   onConnectionState: (listener: (state: ConnectionState) => void) =>
     NativeHogaCore.onConnectionState(state => listener(state as ConnectionState)),
+  /** 내 주문 변화(서버 order 메시지) */
+  onOrderEvent: (listener: (event: OrderEvent) => void) =>
+    NativeHogaCore.onOrderEvent(json => {
+      try {
+        listener(JSON.parse(json) as OrderEvent);
+      } catch {
+        // 형식이 틀린 이벤트는 무시(다음 목록 조회로 맞춰진다)
+      }
+    }),
 };
+
+export interface OrderEvent {
+  t: 'order';
+  key: string;
+  orderId: number;
+  symbol: string;
+  side: 'bid' | 'ask';
+  type: 'limit' | 'market';
+  price: number;
+  qty: number;
+  status: 'NEW' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'REJECTED';
+  filled: number;
+  resting: number;
+  fill?: {price: number; qty: number};
+  ts: number;
+}

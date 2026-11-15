@@ -11,8 +11,21 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 |---|---|---|
 | M0 | 같은 C++ 함수를 C++ · Node · iOS · Android에서 호출 | 완료 |
 | M1 | C++ 호가·재동기화·주문 검증·매칭 엔진 + Node 모의 거래소 서버 | 완료 |
-| **M2** | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | **완료** |
-| M3 | 주문 화면 · 멱등 주문 · 보안 저장소 · 생체 인증 | 다음 |
+| M2 | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | 완료 |
+| **M3** | 로그인 · 주문 · 체결 알림 · 보안 저장소 · 기기 보안 신호 | **완료** |
+| M4 | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | 다음 |
+
+### M3 검증 결과 (2026-11-15)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| 서버 | JWT·로그인 제한·리프레시 회전과 재사용 감지·사용자별 키 분리·남의 주문에 체결되면 나에게만 알림 (vitest 29개) | 통과 |
+| C++ | `MarketClient` 인증·재연결 후 재인증·주문 이벤트 전달 (코어 49개) | 일반 · ASan · TSan 통과 |
+| 앱 | 주문 상태 머신 8개(타임아웃 후 조회 확정·404면 같은 키 재전송·업무 거부·확인 불가 시 기록 유지·재시작 시 정리) + 화면 흐름 1개 | Jest 통과, `tsc`·ESLint 통과 |
+| iOS | 로그인 → 즉시 체결 주문 → 대기 주문 → 다른 사용자 매도로 체결 알림 | [로그인](docs/m3-ios-login.png) · [주문 창](docs/m3-ios-order-sheet.png) · [체결](docs/m3-ios-order-filled.png) · [체결 알림](docs/m3-ios-fill-notification.png) |
+| iOS + 응답 5초 지연 | 3초 타임아웃 → "확인 중" → 조회로 체결 확정. 서버에는 주문당 정확히 1건 | [확인 중](docs/m3-ios-order-confirming.png) |
+| Android | 로그인 → 강제 종료 → 재실행 시 Keystore 토큰으로 세션 복원(`/auth/refresh` 200) | 서버 요청 로그 |
+| Android `FLAG_SECURE` | 화면 캡처가 검게 나옴(민감 화면 보호 동작) | [캡처](docs/m3-android-flag-secure.png) |
 
 ### M2 검증 결과 (2026-11-15)
 
@@ -33,6 +46,46 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | Node 애드온 | node:test 7개 (매칭 엔진·검증 규칙을 C++에서 그대로 호출) | 통과 |
 | 서버 | vitest 20개 (단위 + 실제 포트를 여는 통합 테스트) | 3회 연속 통과, `tsc` 통과 |
 | 서버 실제 실행 | 2초 동안 2종목 구독 → 변경분 43개, seq 누락 0, SIGTERM 정상 종료 | 확인 |
+
+### M3 주문 · 보안 설계
+
+**주문 — "늦은 응답 = 실패"가 아니다**
+
+```
+ [보내기 전] 미확정 주문으로 보안 저장소에 먼저 기록(write-ahead)
+ submitting ──200──────────────▶ 접수 / 업무 거부(OFF_TICK 등)
+     ├─ 3초 타임아웃·네트워크 오류·5xx·409 ─▶ confirming ── GET /orders/:key
+     │                                         ├─ 있음 ───▶ 접수 확정
+     │                                         ├─ 처리 중 ─▶ 기다렸다 다시 조회
+     │                                         └─ 없음 ───▶ 같은 Idempotency-Key로 재전송
+     └─ 400·422 ─▶ 실패
+ 끝까지 모르면 "확인하지 못했습니다(다시 주문하지 마세요)" + 기록 유지 → 다음 로그인 때 조회로 정리
+ (서버에 도착하지 않은 주문은 자동 재전송하지 않는다 — 사용자의 판단이 바뀌었을 수 있다)
+```
+
+- 주문 화면의 호가단위 이동·상하한가·검증은 서버와 같은 C++(`roundToTick`·`priceLimits`·`validateOrder`)를 TurboModule로 호출합니다. 멱등 키도 C++ `std::random_device` UUID입니다.
+- 전송·확인 중에는 주문 버튼과 닫기가 잠겨 중복 주문이 불가능합니다.
+
+**체결 알림 — 드문 것은 push, 잦은 것은 pull**
+
+- 내 대기 주문이 다른 사람 주문으로 체결되면 서버 `OrderTracker`가 매칭 결과의 `maker`로 찾아내 **그 사용자의 연결에만** `order` 메시지를 보냅니다.
+- C++ `MarketClient`는 연결될 때마다 구독보다 먼저 액세스 토큰으로 인증하고, `order` 메시지는 TurboModule `EventEmitter`로 JS에 바로 넘깁니다(시세는 계속 pull).
+
+**인증 · 보안 저장**
+
+| 항목 | 구현 |
+|---|---|
+| 액세스 토큰 | HS256 JWT 15분, `node:crypto`로 직접 구현(alg 고정·`timingSafeEqual`·만료 검사), 메모리에만 보관 |
+| 리프레시 토큰 | 7일, 서버엔 해시만 저장, 쓸 때마다 회전. 이미 쓴 토큰이 다시 오면 탈취로 보고 계열 전체 폐기 |
+| 저장 순서 | 회전된 새 토큰을 **먼저 저장한 뒤** 사용(저장 전에 죽으면 다음 실행에서 재사용으로 간주되어 세션이 끊기므로) |
+| 로그인 보호 | scrypt 해시, 사용자당 분당 실패 5회 → 429, 없는 사용자도 같은 해시 비용 |
+| iOS 저장소 | **Objective-C** Keychain: `AfterFirstUnlockThisDeviceOnly`, 갱신 우선(update → add). 생체 값은 `SecAccessControl(.biometryCurrentSet)` |
+| Android 저장소 | **Kotlin** Keystore AES-256-GCM. 생체 값은 사용할 때마다 인증이 필요한 키 + `BiometricPrompt` `CryptoObject`(콜백 우회 불가), 지문 추가 시 무효화 |
+| 생체 잠금 | 앱을 열 때 생체 보호 값을 읽어야 세션 복원. 토큰 회전마다 생체 인증을 요구하지 않도록 토큰이 아닌 "잠금 값"을 생체로 보호 |
+| 기기 보안 신호 | iOS **Objective-C**(탈옥 경로·샌드박스 쓰기·후킹 dylib·`P_TRACED`·캡처 상태), Android **Java**(su·test-keys·에뮬레이터·디버거). 참고 신호로만 쓰고 최종 판단은 서버 |
+| 화면 보호 | Android `FLAG_SECURE`(캡처·녹화·최근 앱 미리보기 차단), iOS는 캡처를 막을 수 없어 앱 전환기 미리보기를 블러로 가림 |
+
+개발용 계정(서버 시드, 실제 계정 아님): `demo / hoga-demo-1234`, `trader2 / hoga-trader-5678`
 
 ### M2 데이터 흐름 — 고빈도 시세는 JS를 지나가지 않는다
 
@@ -83,16 +136,22 @@ hoga/
 │  └─ turbomodule/                # RN C++ TurboModule (iOS·Android 공용 구현 1벌)
 │     ├─ ios/IosTransport.mm      # URLSession 웹소켓 (Objective-C++)
 │     └─ android/AndroidTransport.cpp  # JNI ↔ Kotlin HogaTransport (OkHttp)
+├─ bindings/platform-modules/ios/ # Objective-C TurboModule: Keychain 보안 저장소 · 기기 보안 신호
 ├─ server/                        # Node.js 모의 거래소 (TypeScript, Fastify, ws)
 │  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기
 │  ├─ src/gateway/                # WebSocket 팬아웃 (백프레셔·하트비트·제한)
-│  ├─ src/api/                    # REST 주문 (멱등 키)
+│  ├─ src/api/                    # REST: 인증 · 주문 (멱등 키)
+│  ├─ src/auth/                   # HS256 JWT · 사용자 · 리프레시 회전
+│  ├─ src/orders/tracker.ts       # 사용자 주문 상태 · 체결 알림
 │  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현, Redis는 M6)
 │  └─ test/
 ├─ apps/mobile/                   # React Native 0.88 앱
 │  ├─ src/screens/                # 관심종목 · 실시간 호가
 │  ├─ src/hooks/                  # usePolled: C++에서 화면 주기로 끌어오기
-│  └─ android/.../transport/HogaTransport.kt
+│  ├─ src/orders/                 # 주문 상태 머신 · 미확정 주문 기록 · 내 주문
+│  ├─ src/auth/session.ts         # 로그인 · 토큰 회전 · 생체 잠금
+│  ├─ android/.../transport/HogaTransport.kt
+│  └─ android/.../security/       # Kotlin SecureStoreModule · Java DeviceGuardModule
 └─ HogaNative.podspec             # iOS: core + turbomodule 소스를 컴파일
 ```
 
@@ -122,7 +181,9 @@ npm test
 | `GET /healthz`, `/readyz`, `/metrics` | 상태 · Prometheus 지표 |
 | `GET /symbols` | 모의 종목 목록 (기준가, 호가단위, 상·하한가) |
 | `GET /book/:symbol?depth=20` | 스냅샷 (재동기화용) |
-| `POST /orders` | 주문. `Idempotency-Key` 헤더 필수 |
+| `POST /auth/login`, `/auth/refresh`, `/auth/logout` | 로그인 · 토큰 회전 · 로그아웃 |
+| `GET /orders?symbol=` | 내 주문 목록 (Bearer 토큰 필요, 아래 주문 API 모두 동일) |
+| `POST /orders` | 주문. `Idempotency-Key` 헤더 필수(사용자별로 분리) |
 | `GET /orders/:key` | 주문 결과 조회 (타임아웃 후 확정용) |
 | `POST /orders/:key/cancel` | 대기 주문 취소 |
 
@@ -219,9 +280,13 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 
 - 호가가격단위 · 가격제한폭은 **간소화한 규칙**입니다. KRX 규정 원문과 대조하고 출처를 남겨야 합니다.
 - 서버의 버스·멱등 저장소는 메모리 구현만 있습니다. 여러 프로세스 확장(Redis Pub/Sub, `SET NX`)은 M6에서 붙입니다.
-- 인증이 없어 누구나 남의 주문 키로 조회·취소할 수 있습니다(M3에서 JWT 추가).
+- 리프레시 토큰·주문 기록·멱등 키가 서버 메모리에만 있어 서버를 재시작하면 다시 로그인해야 합니다(M6에서 Redis).
+- 생체 인증 경로(Face ID·지문)는 시뮬레이터·에뮬레이터에 생체 정보가 등록되지 않아 **기기에서 확인하지 못했습니다**. 생체 없는 경로(일반 Keychain·Keystore 저장, 세션 복원)만 확인했습니다.
+- Android 14+ 화면 캡처 감지(`DETECT_SCREEN_CAPTURE`)는 넣지 않았고 `FLAG_SECURE`로 차단만 합니다.
+- 인증서 고정은 서버가 아직 HTTP라 넣지 않았습니다.
+- 접근성 트리로 화면을 읽는 자동화(uiautomator)는 시세가 계속 바뀌면 동작하지 않습니다 → Appium 단계(M6)에서 테스트 모드를 고려합니다.
 - 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용). 재연결 후에도 이전 체결 목록은 그대로 보입니다.
 - 앱의 서버 주소는 `localhost:8080`으로 고정입니다(시뮬레이터·에뮬레이터 개발용).
 - 인증서 고정·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
 - 차트는 M4(Fabric 네이티브 뷰)에서 만듭니다.
-- 다음: **M3** — 주문 화면(호가 탭 → 주문, 멱등 키, 타임아웃 시 조회로 확정), 보안 저장소(Keychain·Keystore), 생체 인증, 탈옥·루팅 신호.
+- 다음: **M4** — Fabric 네이티브 캔들 차트(iOS Obj-C++ + CoreGraphics / Android Kotlin Canvas, C++ 캔들 집계를 직접 읽기).

@@ -26,6 +26,13 @@ const schema = z.object({
 
   /** 멱등 키 보관 시간 */
   IDEMPOTENCY_TTL_MS: z.coerce.number().int().min(1000).default(24 * 60 * 60 * 1000),
+  // ---- 인증 ----
+  /** HS256 서명 키. 운영에서는 반드시 32바이트 이상 무작위 값으로 바꾼다 */
+  JWT_SECRET: z.string().min(16).default('hoga-dev-only-secret-change-me'),
+  ACCESS_TOKEN_TTL_SEC: z.coerce.number().int().min(10).default(15 * 60),
+  REFRESH_TOKEN_TTL_SEC: z.coerce.number().int().min(60).default(7 * 24 * 60 * 60),
+  LOGIN_MAX_FAILURES_PER_MIN: z.coerce.number().int().min(1).default(5),
+
   /** 사용 예정: Redis 연결(M6). 지금은 메모리 구현만 사용 */
   REDIS_URL: z.string().optional(),
 });

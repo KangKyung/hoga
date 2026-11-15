@@ -157,13 +157,34 @@ void MarketClient::sendOpLocked(const char* op, const std::vector<std::string>& 
   transport_->send(msg.dump());
 }
 
+void MarketClient::sendAuthLocked() {
+  if (authToken_.empty() || state_ != ConnectionState::Open) return;
+  json msg{{"op", "auth"}, {"token", authToken_}};
+  transport_->send(msg.dump());
+}
+
+void MarketClient::setAuthToken(std::string token) {
+  std::lock_guard lock(mutex_);
+  authToken_ = std::move(token);
+  stats_.authenticated = false;
+  sendAuthLocked();
+}
+
+void MarketClient::setUserEventListener(UserEventListener listener) {
+  std::lock_guard lock(mutex_);
+  userListener_ = std::move(listener);
+}
+
 void MarketClient::onOpen(std::uint64_t generation) {
   Deferred after;
   {
     std::lock_guard lock(mutex_);
     if (generation != generation_) return;
     stats_.attempt = 0;
+    stats_.authenticated = false;
     setStateLocked(ConnectionState::Open, after);
+    // 인증을 구독보다 먼저: 끊긴 동안 생긴 내 주문 변화는 앱이 REST로 다시 조회한다.
+    sendAuthLocked();
     // 끊겨 있던 동안의 상태는 믿을 수 없으므로 처음부터: 서버가 구독 직후 스냅샷을 보낸다.
     std::vector<std::string> all;
     for (auto& [symbol, data] : symbols_) {
@@ -182,6 +203,7 @@ void MarketClient::onClose(std::uint64_t generation, int code, const std::string
     std::lock_guard lock(mutex_);
     if (generation != generation_ || state_ == ConnectionState::Stopped) return;
     ++generation_;
+    stats_.authenticated = false;  // 인증은 연결 단위
     stats_.lastError = "closed " + std::to_string(code) + (reason.empty() ? "" : " " + reason);
     for (auto& [_, data] : symbols_) {
       data.sync->reset();
@@ -210,13 +232,17 @@ void MarketClient::onClose(std::uint64_t generation, int code, const std::string
 }
 
 void MarketClient::onMessage(std::uint64_t generation, const std::string& text) {
-  std::lock_guard lock(mutex_);
-  if (generation != generation_) return;
-  ++stats_.messages;
-  handleMessageLocked(text);
+  Deferred after;
+  {
+    std::lock_guard lock(mutex_);
+    if (generation != generation_) return;
+    ++stats_.messages;
+    handleMessageLocked(text, after);
+  }
+  run(after);
 }
 
-void MarketClient::handleMessageLocked(const std::string& text) {
+void MarketClient::handleMessageLocked(const std::string& text, Deferred& after) {
   const auto msg = json::parse(text, nullptr, /*allow_exceptions=*/false);
   if (msg.is_discarded() || !msg.is_object()) {
     ++stats_.parseErrors;
@@ -224,6 +250,14 @@ void MarketClient::handleMessageLocked(const std::string& text) {
   }
   try {
     const auto type = msg.value("t", std::string{});
+    if (type == "order") {
+      if (userListener_) after.push_back([listener = userListener_, text] { listener(text); });
+      return;
+    }
+    if (type == "authed") {
+      stats_.authenticated = true;
+      return;
+    }
     if (type == "error") {
       stats_.lastError = msg.value("code", std::string{}) + ": " + msg.value("message", std::string{});
       return;

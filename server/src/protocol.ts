@@ -19,6 +19,8 @@ export const clientMessage = z.discriminatedUnion('op', [
   z.object({ op: z.literal('sub'), symbols: z.array(symbol).min(1).max(50) }),
   z.object({ op: z.literal('unsub'), symbols: z.array(symbol).min(1).max(50) }),
   z.object({ op: z.literal('ping'), ts: z.number().optional() }),
+  /** 로그인한 사용자의 주문 알림을 받으려면 액세스 토큰으로 인증 */
+  z.object({ op: z.literal('auth'), token: z.string().min(10).max(4096) }),
 ]);
 export type ClientMessage = z.infer<typeof clientMessage>;
 
@@ -59,7 +61,7 @@ export interface TradeMessage {
 
 export interface ErrorMessage {
   t: 'error';
-  code: 'BAD_MESSAGE' | 'UNKNOWN_SYMBOL' | 'TOO_MANY_SUBSCRIPTIONS' | 'RATE_LIMITED';
+  code: 'BAD_MESSAGE' | 'UNKNOWN_SYMBOL' | 'TOO_MANY_SUBSCRIPTIONS' | 'RATE_LIMITED' | 'UNAUTHORIZED';
   message: string;
 }
 
@@ -73,7 +75,32 @@ export interface SubscribedMessage {
   symbols: string[];
 }
 
+export interface AuthedMessage {
+  t: 'authed';
+  userId: string;
+}
+
+/** 내 주문 상태가 바뀔 때(접수·체결·취소) 나에게만 오는 메시지 */
+export interface OrderEventMessage {
+  t: 'order';
+  key: string;
+  orderId: number;
+  symbol: string;
+  side: 'bid' | 'ask';
+  type: 'limit' | 'market';
+  price: number;
+  qty: number;
+  status: string;
+  filled: number;
+  resting: number;
+  /** 이번 변화가 체결이면 그 체결 */
+  fill?: { price: number; qty: number };
+  ts: number;
+}
+
 export type ServerMessage =
+  | AuthedMessage
+  | OrderEventMessage
   | SnapshotMessage
   | DeltaMessage
   | TradeMessage

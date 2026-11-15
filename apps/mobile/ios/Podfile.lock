@@ -2119,7 +2119,7 @@ SPEC CHECKSUMS:
   fmt: ba0886e864ebb21d14c98b2e12e164b8002f5b93
   glog: 3cf7cb46f743c4bc758ae3e6d9c15bd1b4cfd6d4
   hermes-engine: 79484fc4e58f328d01b9339ef899ca633d3702ee
-  HogaNative: c57fab0bd376035a35904614915382ecae6c312d
+  HogaNative: 4fd263e3b210bf3143405537ba2800854f4366ff
   RCT-Folly: 82921e585c0400eda46fac1068297aa9dfb035e4
   RCTDeprecation: c62b9b3fbf0d26b76755f3ebd1c913a4fb469dde
   RCTRequired: d0563e2484633b657976195f0543e180133afd3a
@@ -2195,7 +2195,7 @@ SPEC CHECKSUMS:
   React-viewtransitionnativemodule: 31dae72887e60de89cf6e1c8def004fdfe554119
   React-webperformancenativemodule: c376d2e7367b3c0d65df3b60ff162554791e7f92
   ReactAppDependencyProvider: 2dbb2d65f3a487b8a69449f5b1b12b44656d2204
-  ReactCodegen: a218bc85a27409dc7d3ee09e19f3565c6973c044
+  ReactCodegen: 769bd43ec0940a52fbdb4f40f623145d888136dd
   ReactCommon: b63ce798b898ed77c6cfdeb80b18080161f52ed5
   ReactNativeDependencies: c48436bd47372eb6003470186c3e3e4ebe36c6b1
   SocketRocket: 37aec555668fb852ec12e3c0de59a86ca58f0871

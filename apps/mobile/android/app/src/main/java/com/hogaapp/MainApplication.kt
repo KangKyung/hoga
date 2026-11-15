@@ -14,8 +14,8 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
+          // 앱 안의 플랫폼별 TurboModule(보안 저장소·기기 보안 신호)
+          add(com.hogaapp.security.HogaSecurityPackage())
         },
     )
   }

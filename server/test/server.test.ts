@@ -57,20 +57,53 @@ const isType =
   (m: ServerMessage): m is Extract<ServerMessage, { t: K }> =>
     m.t === t;
 
-async function postOrder(server: HogaServer, body: unknown, key = randomUUID()) {
+const tokens = new Map<string, string>();
+
+/** 테스트용 모의 사용자 로그인(서버 시드 값) */
+async function login(server: HogaServer, username = 'demo', password = 'hoga-demo-1234') {
+  const res = await fetch(`${server.url()}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const body = (await res.json()) as { accessToken: string; refreshToken: string; user: { id: string } };
+  return { status: res.status, ...body };
+}
+
+async function tokenFor(server: HogaServer, username = 'demo') {
+  const cacheKey = `${server.url()}|${username}`;
+  if (!tokens.has(cacheKey)) {
+    const password = username === 'demo' ? 'hoga-demo-1234' : 'hoga-trader-5678';
+    tokens.set(cacheKey, (await login(server, username, password)).accessToken);
+  }
+  return tokens.get(cacheKey)!;
+}
+
+async function postOrder(server: HogaServer, body: unknown, key = randomUUID(), username = 'demo') {
   const res = await fetch(`${server.url()}/orders`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'idempotency-key': key },
+    headers: {
+      'content-type': 'application/json',
+      'idempotency-key': key,
+      authorization: `Bearer ${await tokenFor(server, username)}`,
+    },
     body: JSON.stringify(body),
   });
   return { status: res.status, headers: res.headers, body: (await res.json()) as Record<string, unknown>, key };
+}
+
+async function authed(server: HogaServer, path: string, init: RequestInit = {}, username = 'demo') {
+  return fetch(`${server.url()}${path}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), authorization: `Bearer ${await tokenFor(server, username)}` },
+  });
 }
 
 describe('HTTP API', () => {
   it('헬스 체크와 종목 목록', async () => {
     const server = await start();
     const health = await (await fetch(`${server.url()}/healthz`)).json();
-    expect(health).toMatchObject({ ok: true, coreVersion: '0.2.0-m2' });
+    expect(health).toMatchObject({ ok: true, coreVersion: '0.3.0-m3' });
     const symbols = (await (await fetch(`${server.url()}/symbols`)).json()) as { code: string }[];
     expect(symbols.map((s) => s.code)).toContain('000001');
     expect((await fetch(`${server.url()}/book/999999`)).status).toBe(404);
@@ -98,7 +131,7 @@ describe('HTTP API', () => {
 
   it('형식 오류는 400, 업무 규칙 위반은 200 + REJECTED', async () => {
     const server = await start();
-    const noKey = await fetch(`${server.url()}/orders`, {
+    const noKey = await authed(server, '/orders', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ symbol: '000001', side: 'bid', price: 71_200, qty: 1 }),
@@ -117,7 +150,7 @@ describe('HTTP API', () => {
     const pending = postOrder(server, { symbol: '000002', side: 'ask', price: 18_500, qty: 5 }, key);
 
     await new Promise((r) => setTimeout(r, 150));
-    const lookup = await fetch(`${server.url()}/orders/${key}`);
+    const lookup = await authed(server, `/orders/${key}`);
     expect(lookup.status).toBe(200);
     expect(await lookup.json()).toMatchObject({ key, status: 'NEW', resting: 5 });
 
@@ -127,9 +160,9 @@ describe('HTTP API', () => {
   it('대기 주문 취소', async () => {
     const server = await start();
     const order = await postOrder(server, { symbol: '000003', side: 'bid', price: 4_210, qty: 3 });
-    const res = await fetch(`${server.url()}/orders/${order.key}/cancel`, { method: 'POST' });
+    const res = await authed(server, `/orders/${order.key}/cancel`, { method: 'POST' });
     expect(await res.json()).toMatchObject({ status: 'CANCELLED' });
-    const again = await fetch(`${server.url()}/orders/${order.key}/cancel`, { method: 'POST' });
+    const again = await authed(server, `/orders/${order.key}/cancel`, { method: 'POST' });
     expect(await again.json()).toMatchObject({ status: 'REJECTED', reject: 'UNKNOWN_ORDER' });
   });
 });
@@ -244,6 +277,96 @@ describe('WebSocket gateway', () => {
       expect(top(bids, true)).toEqual(latest.bids.slice(0, 5));
       expect(top(asks, false)).toEqual(latest.asks.slice(0, 5));
     }
+    client.ws.close();
+  });
+});
+
+describe('인증', () => {
+  it('로그인 성공·실패, 실패가 반복되면 429', async () => {
+    const server = await start({ LOGIN_MAX_FAILURES_PER_MIN: '3' });
+    const ok = await login(server);
+    expect(ok.status).toBe(200);
+    expect(ok.user.id).toBe('u-demo');
+    for (let i = 0; i < 3; i++) expect((await login(server, 'demo', 'wrong')).status).toBe(401);
+    expect((await login(server, 'demo', 'wrong')).status).toBe(429);
+  });
+
+  it('주문 API는 토큰 없이는 401, 만료 토큰은 TOKEN_EXPIRED', async () => {
+    const server = await start({ ACCESS_TOKEN_TTL_SEC: '10' });
+    const res = await fetch(`${server.url()}/orders`);
+    expect(res.status).toBe(401);
+    const bad = await fetch(`${server.url()}/orders`, { headers: { authorization: 'Bearer abc.def.ghi' } });
+    expect(bad.status).toBe(401);
+  });
+
+  it('리프레시 토큰은 회전되고, 이미 쓴 토큰을 다시 쓰면 그 계열 전체가 무효가 된다', async () => {
+    const server = await start();
+    const first = await login(server);
+    const refresh = (token: string) =>
+      fetch(`${server.url()}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refreshToken: token }),
+      });
+    const second = (await (await refresh(first.refreshToken)).json()) as { refreshToken: string };
+    expect(second.refreshToken).not.toBe(first.refreshToken);
+
+    // 탈취된 이전 토큰 재사용 → 거부 + 정상 사용자의 최신 토큰도 무효화
+    const reuse = await refresh(first.refreshToken);
+    expect(reuse.status).toBe(401);
+    expect(await reuse.json()).toEqual({ error: 'REFRESH_REUSED' });
+    expect((await refresh(second.refreshToken)).status).toBe(401);
+  });
+});
+
+describe('사용자별 주문', () => {
+  it('멱등 키·조회·취소는 사용자별로 분리된다', async () => {
+    const server = await start();
+    const key = randomUUID();
+    const mine = await postOrder(server, { symbol: '000001', side: 'bid', price: 71_000, qty: 1 }, key, 'demo');
+    // 같은 키를 다른 사용자가 써도 충돌하지 않는다
+    const theirs = await postOrder(server, { symbol: '000001', side: 'bid', price: 70_900, qty: 2 }, key, 'trader2');
+    expect(theirs.status).toBe(200);
+    expect(theirs.body.orderId).not.toBe(mine.body.orderId);
+
+    expect((await authed(server, `/orders/${key}`, {}, 'trader2')).status).toBe(200);
+    const list = (await (await authed(server, '/orders', {}, 'demo')).json()) as { key: string; price: number }[];
+    expect(list).toHaveLength(1);
+    expect(list[0]!.price).toBe(71_000);
+  });
+
+  it('내 대기 주문이 다른 사람 주문으로 체결되면 나에게만 order 이벤트가 온다', async () => {
+    const server = await start();
+    const me = await connect(server);
+    const other = await connect(server);
+    me.send({ op: 'auth', token: await tokenFor(server, 'demo') });
+    other.send({ op: 'auth', token: await tokenFor(server, 'trader2') });
+    await me.waitFor(isType('authed'));
+    await other.waitFor(isType('authed'));
+
+    const order = await postOrder(server, { symbol: '000002', side: 'bid', price: 18_400, qty: 10 }, randomUUID(), 'demo');
+    expect(order.body.status).toBe('NEW');
+    await postOrder(server, { symbol: '000002', side: 'ask', price: 18_400, qty: 4 }, randomUUID(), 'trader2');
+
+    const fillEvent = await me.waitFor(
+      (m): m is Extract<ServerMessage, { t: 'order' }> => m.t === 'order' && m.key === order.key && m.filled === 4,
+    );
+    expect(fillEvent).toMatchObject({ status: 'PARTIALLY_FILLED', resting: 6, fill: { price: 18_400, qty: 4 } });
+    // 상대에게는 내 주문 알림이 가지 않는다
+    expect(other.messages.some((m) => m.t === 'order' && m.key === order.key)).toBe(false);
+
+    const latest = (await (await authed(server, `/orders/${order.key}`)).json()) as { filled: number; status: string };
+    expect(latest).toMatchObject({ filled: 4, status: 'PARTIALLY_FILLED' });
+    me.ws.close();
+    other.ws.close();
+  });
+
+  it('잘못된 토큰으로 WS 인증하면 UNAUTHORIZED', async () => {
+    const server = await start();
+    const client = await connect(server);
+    client.send({ op: 'auth', token: 'not-a-real-token' });
+    const err = await client.waitFor(isType('error'));
+    expect(err.code).toBe('UNAUTHORIZED');
     client.ws.close();
   });
 });

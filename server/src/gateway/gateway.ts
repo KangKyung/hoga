@@ -23,8 +23,12 @@ type GatewayConfig = Pick<
   | 'WS_HARD_BUFFER_BYTES'
 >;
 
+/** 액세스 토큰 → 사용자 ID. 틀리거나 만료면 undefined */
+export type Authenticator = (token: string) => string | undefined;
+
 interface Client {
   id: string;
+  userId?: string;
   ws: WebSocket;
   subs: Set<string>;
   /** 송신 버퍼가 밀려 변경분을 건너뛴 종목 → 버퍼가 비면 최신 스냅샷으로 대체 */
@@ -53,7 +57,9 @@ export class Gateway {
   private readonly wss: WebSocketServer;
   private readonly clients = new Set<Client>();
   private readonly bySymbol = new Map<string, Set<Client>>();
+  private readonly byUser = new Map<string, Set<Client>>();
   private readonly unsubscribeBus: () => void;
+  private readonly unsubscribeUsers: () => void;
   private readonly heartbeat: NodeJS.Timeout;
   private closing = false;
 
@@ -64,10 +70,12 @@ export class Gateway {
     private readonly metrics: Metrics,
     private readonly config: GatewayConfig,
     private readonly log: FastifyBaseLogger,
+    private readonly authenticate: Authenticator = () => undefined,
   ) {
     this.wss = new WebSocketServer({ server, path: '/ws', maxPayload: config.WS_MAX_PAYLOAD_BYTES });
     this.wss.on('connection', (ws) => this.onConnection(ws));
     this.unsubscribeBus = bus.subscribeAll((symbol, kind, payload) => this.fanOut(symbol, kind, payload));
+    this.unsubscribeUsers = bus.subscribeUsers((userId, payload) => this.sendToUser(userId, payload));
     this.heartbeat = setInterval(() => this.checkHeartbeats(), config.WS_HEARTBEAT_MS);
     this.heartbeat.unref();
 
@@ -90,6 +98,7 @@ export class Gateway {
     this.closing = true;
     clearInterval(this.heartbeat);
     this.unsubscribeBus();
+    this.unsubscribeUsers();
     for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, 'service restart');
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
   }
@@ -123,6 +132,17 @@ export class Gateway {
     this.clients.delete(client);
     for (const symbol of client.subs) this.bySymbol.get(symbol)?.delete(client);
     client.subs.clear();
+    if (client.userId) this.byUser.get(client.userId)?.delete(client);
+  }
+
+  /** 사용자 전용 메시지(주문 알림). 그 사용자로 인증한 연결에만 보낸다 */
+  private sendToUser(userId: string, payload: string): void {
+    for (const client of this.byUser.get(userId) ?? []) {
+      if (client.ws.readyState !== WebSocket.OPEN) continue;
+      // 주문 알림은 놓치면 안 되므로 시세처럼 건너뛰지 않는다(빈도가 낮다)
+      client.ws.send(payload);
+      this.metrics.inc('hoga_ws_messages_sent_total');
+    }
   }
 
   private takeToken(client: Client): boolean {
@@ -163,6 +183,20 @@ export class Gateway {
       case 'ping':
         this.sendJson(client, { t: 'pong', ts: Date.now() });
         return;
+      case 'auth': {
+        const userId = this.authenticate(msg.token);
+        if (!userId) {
+          this.reject(client, 'UNAUTHORIZED', 'invalid or expired token');
+          return;
+        }
+        if (client.userId) this.byUser.get(client.userId)?.delete(client);
+        client.userId = userId;
+        let set = this.byUser.get(userId);
+        if (!set) this.byUser.set(userId, (set = new Set()));
+        set.add(client);
+        this.sendJson(client, { t: 'authed', userId });
+        return;
+      }
       case 'unsub':
         for (const symbol of msg.symbols) {
           client.subs.delete(symbol);

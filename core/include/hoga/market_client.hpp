@@ -52,6 +52,7 @@ struct ClientStats {
   std::uint64_t resyncs{0};       // 스냅샷으로 다시 맞춘 횟수
   std::uint64_t reconnects{0};
   std::uint64_t parseErrors{0};
+  bool authenticated{false};      // 현재 연결에서 사용자 인증 완료
   std::string lastError;
 };
 
@@ -81,6 +82,8 @@ struct MarketClientOptions {
 class MarketClient : public std::enable_shared_from_this<MarketClient> {
  public:
   using StateListener = std::function<void(ConnectionState state, std::uint32_t attempt)>;
+  // 내 주문 알림(JSON 원문). 빈도가 낮아 JS로 바로 밀어 준다(시세와 달리 push).
+  using UserEventListener = std::function<void(const std::string& json)>;
 
   static std::shared_ptr<MarketClient> create(std::shared_ptr<ITransport> transport,
                                               MarketClientOptions options,
@@ -88,6 +91,10 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
 
   void start();
   void stop();
+
+  // 로그인한 사용자의 액세스 토큰. 연결될 때마다 구독보다 먼저 인증한다. 빈 문자열이면 인증하지 않는다.
+  void setAuthToken(std::string token);
+  void setUserEventListener(UserEventListener listener);
 
   void subscribe(const std::vector<std::string>& symbols);
   void unsubscribe(const std::vector<std::string>& symbols);
@@ -115,7 +122,8 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   void onOpen(std::uint64_t generation);
   void onMessage(std::uint64_t generation, const std::string& text);
   void onClose(std::uint64_t generation, int code, const std::string& reason);
-  void handleMessageLocked(const std::string& text);
+  void handleMessageLocked(const std::string& text, Deferred& after);
+  void sendAuthLocked();
   void requestSnapshotLocked(const std::string& symbol);
   void onSnapshotResponse(const std::string& symbol, int status, const std::string& body);
   void sendOpLocked(const char* op, const std::vector<std::string>& symbols);
@@ -125,6 +133,8 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   std::shared_ptr<ITransport> transport_;
   MarketClientOptions options_;
   StateListener listener_;
+  UserEventListener userListener_;
+  std::string authToken_;
 
   std::map<std::string, SymbolData, std::less<>> symbols_;
   ConnectionState state_{ConnectionState::Idle};

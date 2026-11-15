@@ -241,3 +241,41 @@ TEST(MarketClient, MalformedMessagesAreCountedNotFatal) {
   EXPECT_EQ(f.client->stats().lastError, "RATE_LIMITED: slow down");
   EXPECT_EQ(f.client->stats().state, ConnectionState::Open);
 }
+
+TEST(MarketClient, AuthenticatesBeforeSubscribingOnEveryConnection) {
+  Fixture f;
+  f.client->subscribe({"000001"});
+  f.client->setAuthToken("token-abc");  // 연결 전: 보내지 않고 기억만
+  f.client->start();
+  EXPECT_TRUE(f.transport->sent.empty());
+  f.transport->open();
+  ASSERT_EQ(f.transport->sent.size(), 2u);
+  EXPECT_EQ(f.transport->sent[0], R"({"op":"auth","token":"token-abc"})");
+  EXPECT_EQ(f.transport->sent[1], R"({"op":"sub","symbols":["000001"]})");
+
+  f.transport->message(R"({"t":"authed","userId":"u-demo"})");
+  EXPECT_TRUE(f.client->stats().authenticated);
+
+  // 재연결 후에도 다시 인증
+  f.transport->serverClose(1012);
+  EXPECT_FALSE(f.client->stats().authenticated);
+  f.transport->runTimers();
+  f.transport->open();
+  EXPECT_EQ(f.transport->sent[2], R"({"op":"auth","token":"token-abc"})");
+
+  // 연결 중 토큰 교체(갱신)는 즉시 보낸다
+  f.client->setAuthToken("token-new");
+  EXPECT_EQ(f.transport->sent.back(), R"({"op":"auth","token":"token-new"})");
+}
+
+TEST(MarketClient, ForwardsOrderEventsToListener) {
+  Fixture f;
+  std::vector<std::string> events;
+  f.client->setUserEventListener([&](const std::string& json) { events.push_back(json); });
+  f.client->start();
+  f.transport->open();
+  const std::string event = R"({"t":"order","key":"k1","orderId":3,"symbol":"000001","status":"FILLED"})";
+  f.transport->message(event);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0], event);
+}

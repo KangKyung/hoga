@@ -15,3 +15,6 @@ export const SERVER = {
 export const BOOK_REFRESH_HZ = 12;
 /** 이 시간 동안 호가가 안 바뀌면 "지연" 표시 */
 export const STALE_AFTER_MS = 3_000;
+
+/** 주문 응답 제한 시간. 넘으면 실패가 아니라 "확인 중"으로 넘어가 조회로 확정한다. */
+export const ORDER_TIMEOUT_MS = 3_000;

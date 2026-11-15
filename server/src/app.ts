@@ -1,6 +1,9 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 
+import { registerAuthRoutes } from './api/auth.js';
 import { registerOrderRoutes, type OrderRecord } from './api/orders.js';
+import { AuthService } from './auth/auth.js';
+import { UserStore } from './auth/users.js';
 import { InMemoryBus, type Bus } from './bus.js';
 import type { Config } from './config.js';
 import { coreVersion } from './core.js';
@@ -8,6 +11,7 @@ import { Gateway } from './gateway/gateway.js';
 import { InMemoryIdempotencyStore } from './idempotency.js';
 import { Market, type MarketOptions } from './market/market.js';
 import { Metrics } from './metrics.js';
+import { OrderTracker } from './orders/tracker.js';
 import { SYMBOL_PATTERN } from './protocol.js';
 
 export interface HogaServer {
@@ -34,7 +38,20 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
   const bus: Bus = new InMemoryBus();
   const market = new Market(bus, metrics, { dropSeqRate: config.FAULT_DROP_SEQ_RATE, ...options.market });
   const store = new InMemoryIdempotencyStore<OrderRecord>(config.IDEMPOTENCY_TTL_MS);
-  const gateway = new Gateway(app.server, bus, market, metrics, config, log);
+  const tracker = new OrderTracker(market, bus);
+  const auth = new AuthService(new UserStore(), {
+    secret: config.JWT_SECRET,
+    accessTtlSec: config.ACCESS_TOKEN_TTL_SEC,
+    refreshTtlSec: config.REFRESH_TOKEN_TTL_SEC,
+    maxFailuresPerMinute: config.LOGIN_MAX_FAILURES_PER_MIN,
+  });
+  const gateway = new Gateway(app.server, bus, market, metrics, config, log, (token) => {
+    try {
+      return auth.verify(token).sub;
+    } catch {
+      return undefined;
+    }
+  });
   const startedAt = Date.now();
 
   app.get('/healthz', async () => ({ ok: true, coreVersion: coreVersion(), uptimeMs: Date.now() - startedAt }));
@@ -56,9 +73,12 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     },
   );
 
+  registerAuthRoutes(app, auth);
   registerOrderRoutes(app, {
     market,
     store,
+    tracker,
+    auth,
     metrics,
     responseDelayMs: config.FAULT_ORDER_DELAY_MS,
   });
@@ -85,6 +105,7 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     async stop() {
       stopSimulator();
       clearInterval(sweeper);
+      tracker.close();
       await gateway.close();
       await app.close();
       await bus.close();

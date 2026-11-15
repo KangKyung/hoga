@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <random>
 #include <vector>
 
 #include "PlatformTransport.h"
 #include "hoga/core.hpp"
+#include "hoga/order.hpp"
 
 namespace facebook::react {
 
@@ -78,6 +81,49 @@ double NativeHogaCore::roundToTick(jsi::Runtime& rt, double price, jsi::String m
       hoga::roundToTick(requirePrice(rt, price), m == "up" ? hoga::Round::Up : hoga::Round::Down));
 }
 
+jsi::Object NativeHogaCore::priceLimits(jsi::Runtime& rt, double basePrice) {
+  const auto band = hoga::priceLimits(requirePrice(rt, basePrice));
+  jsi::Object out(rt);
+  out.setProperty(rt, "lower", static_cast<double>(band.lower));
+  out.setProperty(rt, "upper", static_cast<double>(band.upper));
+  return out;
+}
+
+std::string NativeHogaCore::validateOrder(jsi::Runtime& rt, jsi::String side, jsi::String type, double price,
+                                          double qty, double basePrice) {
+  const auto s = side.utf8(rt);
+  const auto t = type.utf8(rt);
+  if (s != "bid" && s != "ask") throw jsi::JSError(rt, "side must be 'bid' or 'ask'");
+  if (t != "limit" && t != "market") throw jsi::JSError(rt, "type must be 'limit' or 'market'");
+  // 수량이 소수면 서버도 형식 오류로 거부하므로 여기서는 업무 규칙상 INVALID_QTY로 본다.
+  if (!std::isfinite(qty) || std::floor(qty) != qty) return std::string(hoga::toString(hoga::RejectReason::InvalidQty));
+  const hoga::OrderRequest order{s == "bid" ? hoga::Side::Bid : hoga::Side::Ask,
+                                 t == "limit" ? hoga::OrderType::Limit : hoga::OrderType::Market,
+                                 requirePrice(rt, price), static_cast<hoga::Qty>(qty)};
+  hoga::ValidationPolicy policy;
+  policy.basePrice = requirePrice(rt, basePrice);
+  return std::string(hoga::toString(hoga::validateOrder(order, policy)));
+}
+
+std::string NativeHogaCore::randomId(jsi::Runtime& /*rt*/) {
+  // UUID v4. std::random_device는 iOS·Android에서 OS 난수원(arc4random / urandom)을 쓴다.
+  std::random_device rd;
+  std::uniform_int_distribution<unsigned> byte(0, 255);
+  unsigned char b[16];
+  for (auto& x : b) x = static_cast<unsigned char>(byte(rd));
+  b[6] = static_cast<unsigned char>((b[6] & 0x0F) | 0x40);
+  b[8] = static_cast<unsigned char>((b[8] & 0x3F) | 0x80);
+  char out[37];
+  std::snprintf(out, sizeof(out), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", b[0], b[1],
+                b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+  return out;
+}
+
+void NativeHogaCore::setAuthToken(jsi::Runtime& rt, jsi::String token) {
+  authToken_ = token.utf8(rt);
+  if (client_) client_->setAuthToken(authToken_);
+}
+
 void NativeHogaCore::connect(jsi::Runtime& rt, jsi::String wsUrl, jsi::String httpBaseUrl) {
   if (client_) client_->stop();
 
@@ -95,6 +141,12 @@ void NativeHogaCore::connect(jsi::Runtime& rt, jsi::String wsUrl, jsi::String ht
   };
 
   client_ = hoga::MarketClient::create(hoga::platform::makePlatformTransport(), std::move(options), listener);
+  client_->setUserEventListener([alive, invoker, self = this](const std::string& json) {
+    invoker->invokeAsync([alive, self, json] {
+      if (alive.lock()) self->emitOnOrderEvent(json);
+    });
+  });
+  if (!authToken_.empty()) client_->setAuthToken(authToken_);
   client_->start();
 }
 

@@ -27,7 +27,7 @@ constexpr Price kLimitPercent = 30;
 
 }  // namespace
 
-std::string_view coreVersion() noexcept { return "0.2.0-m2"; }
+std::string_view coreVersion() noexcept { return "0.3.0-m3"; }
 
 Price tickSize(Price price) noexcept {
   if (price <= 0) return 0;
