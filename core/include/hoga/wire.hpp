@@ -48,6 +48,8 @@ struct TradeMsg {
   Price price{0};
   Qty qty{0};
   Side aggressor{Side::Bid};
+  // 단일가 체결: 주도한 쪽이 없다(이진 1바이트 값 2, JSON "N"). true면 aggressor는 쓰지 않는다
+  bool auction{false};
   bool operator==(const TradeMsg&) const = default;
 };
 

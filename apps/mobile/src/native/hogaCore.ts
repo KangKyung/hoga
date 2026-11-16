@@ -37,7 +37,8 @@ export interface BookView {
 export interface Trade {
   price: number;
   qty: number;
-  aggressor: 'bid' | 'ask';
+  /** none = 단일가 체결(주도한 쪽 없음) */
+  aggressor: 'bid' | 'ask' | 'none';
   ts: number;
 }
 
@@ -103,13 +104,25 @@ export const hogaCore = {
   /** 내 주문 변화(서버 order 메시지) */
   onOrderEvent: (listener: (event: OrderEvent) => void) =>
     NativeHogaCore.onOrderEvent(json => {
-      try {
-        listener(JSON.parse(json) as OrderEvent);
-      } catch {
-        // 형식이 틀린 이벤트는 무시(다음 목록 조회로 맞춰진다)
-      }
+      const event = parseUserEvent(json);
+      if (event?.t === 'order') listener(event as OrderEvent);
+    }),
+  /** 서버가 WS 인증을 거절함(액세스 토큰 만료 등) → 토큰을 갱신하면 C++가 새 토큰으로 다시 인증한다 */
+  onAuthRejected: (listener: () => void) =>
+    NativeHogaCore.onOrderEvent(json => {
+      const event = parseUserEvent(json);
+      if (event?.t === 'error' && event.code === 'UNAUTHORIZED') listener();
     }),
 };
+
+/** 사용자 전용 메시지(주문 알림·인증 거절). 형식이 틀리면 무시(다음 목록 조회로 맞춰진다) */
+function parseUserEvent(json: string): {t?: string; code?: string} | null {
+  try {
+    return JSON.parse(json) as {t?: string; code?: string};
+  } catch {
+    return null;
+  }
+}
 
 export interface OrderEvent {
   t: 'order';

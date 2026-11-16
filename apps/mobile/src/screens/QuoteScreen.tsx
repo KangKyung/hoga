@@ -258,7 +258,8 @@ function BookRow(props: {
 
 function TradeRow({trade}: {trade: Trade}) {
   const time = new Date(trade.ts).toTimeString().slice(0, 8);
-  const color = trade.aggressor === 'bid' ? colors.up : colors.down;
+  // 단일가 체결은 주도한 쪽이 없어 중립색
+  const color = trade.aggressor === 'none' ? colors.text : trade.aggressor === 'bid' ? colors.up : colors.down;
   return (
     <View style={styles.tradeRow}>
       <Text style={[styles.tradeText, mono, {color: colors.mute}]}>{time}</Text>

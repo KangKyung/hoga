@@ -121,9 +121,9 @@ export class Gateway {
    * 장애 시연(관리 콘솔): 서버는 그대로 두고 지금 연결만 1012로 끊는다.
    * 클라이언트가 백오프로 재접속하고 스냅샷으로 다시 맞추는지 보기 위한 것. 끊은 수를 돌려준다.
    */
-  disconnectAll(): number {
+  disconnectAll(why = 'admin disconnect'): number {
     const count = this.clients.size;
-    const reason = retryReason('admin disconnect', reconnectWindowMs(count, this.config.WS_RECONNECT_ACCEPT_PER_SEC));
+    const reason = retryReason(why, reconnectWindowMs(count, this.config.WS_RECONNECT_ACCEPT_PER_SEC));
     for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, reason);
     return count;
   }

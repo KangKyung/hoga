@@ -32,6 +32,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** 같은 내용이면 같은 지문. 키를 다른 주문에 재사용하는 버그를 잡는다. */
 const fingerprint = (body: OrderBody) =>
   JSON.stringify([body.symbol, body.side, body.type, body.price ?? 0, body.qty, body.amendOf ?? '']);
+const recordFingerprint = (r: OrderRecord) => JSON.stringify([r.symbol, r.side, r.type, r.price, r.qty, r.amendOf ?? '']);
 
 export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps): void {
   const { market, store, tracker, metrics } = deps;
@@ -125,6 +126,15 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
         return reply.code(403).send({ error: 'OTP_REQUIRED' });
       }
 
+      // 멱등 키 저장소는 24시간 뒤 잊지만 주문 기록은 남는다. 기록이 있는 키는 기간과 상관없이 다시 실행하지 않는다
+      // (다시 실행하면 같은 키에 묶인 원장 예약·주문 기록을 덮어써 첫 주문이 고아가 되고 예수금이 음수가 될 수 있다)
+      const existing = tracker.get(userId, key);
+      if (existing) {
+        if (recordFingerprint(existing) !== fingerprint(body)) return reply.code(422).send({ error: 'IDEMPOTENCY_KEY_REUSED' });
+        metrics.inc('hoga_orders_replayed_total');
+        return reply.header('idempotent-replayed', 'true').send(existing);
+      }
+
       const storeKey = OrderTracker.userKey(userId, key);
       const begin = await store.begin(storeKey, fingerprint(body));
       if (begin.state === 'conflict') return reply.code(422).send({ error: 'IDEMPOTENCY_KEY_REUSED' });
@@ -138,11 +148,18 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       let record: OrderRecord;
       try {
         record = execute(userId, key, body);
-        tracker.add(record);
-        await store.complete(storeKey, record);
       } catch (err) {
+        // 엔진에 닿기 전 실패만 키를 풀어 재시도를 허용한다
         await store.abandon(storeKey);
         throw err;
+      }
+      tracker.add(record);
+      try {
+        await store.complete(storeKey, record);
+      } catch (err) {
+        // 주문은 이미 엔진에 들어갔다. 키를 풀면 재시도가 같은 주문을 한 번 더 낸다 → 풀지 않고 결과를 돌려준다.
+        // 같은 키 재시도는 위의 주문 기록 확인으로 이 결과를 받는다
+        request.log.error({ err, key: storeKey }, 'idempotency complete failed after execution');
       }
       metrics.inc('hoga_orders_total', { status: record.status });
 

@@ -44,6 +44,8 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
  */
 export class AuthService {
   private readonly failures = new Map<string, number[]>();
+  /** 해시 확인 중인 시도 수. 실패 수에 더해 제한을 본다(동시에 보낸 요청이 모두 "실패 0건"으로 통과하지 않게) */
+  private readonly inFlight = new Map<string, number>();
 
   constructor(
     private readonly users: UserStore,
@@ -57,10 +59,22 @@ export class AuthService {
     const userKey = `u:${username}`;
     const ipKey = ip ? `ip:${ip}` : undefined;
     const ipLimit = this.config.maxFailuresPerMinutePerIp ?? this.config.maxFailuresPerMinute * 4;
-    if (this.recentFailures(userKey, nowMs).length >= this.config.maxFailuresPerMinute) throw new AuthError('TOO_MANY_ATTEMPTS');
-    if (ipKey && this.recentFailures(ipKey, nowMs).length >= ipLimit) throw new AuthError('TOO_MANY_ATTEMPTS');
+    const used = (key: string) => this.recentFailures(key, nowMs).length + (this.inFlight.get(key) ?? 0);
+    if (used(userKey) >= this.config.maxFailuresPerMinute) throw new AuthError('TOO_MANY_ATTEMPTS');
+    if (ipKey && used(ipKey) >= ipLimit) throw new AuthError('TOO_MANY_ATTEMPTS');
 
-    const user = await this.users.verify(username, password);
+    const keys = ipKey ? [userKey, ipKey] : [userKey];
+    for (const k of keys) this.inFlight.set(k, (this.inFlight.get(k) ?? 0) + 1);
+    let user: User | undefined;
+    try {
+      user = await this.users.verify(username, password);
+    } finally {
+      for (const k of keys) {
+        const n = (this.inFlight.get(k) ?? 1) - 1;
+        if (n <= 0) this.inFlight.delete(k);
+        else this.inFlight.set(k, n);
+      }
+    }
     if (!user) {
       this.recordFailure(userKey, nowMs);
       if (ipKey) this.recordFailure(ipKey, nowMs);

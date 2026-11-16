@@ -28,7 +28,7 @@ up() {
   listening "$PORT" && { echo ":$PORT is busy (stop the dev server first)" >&2; exit 1; }
   redis-server --port "$REDIS_PORT" --save '' --appendonly no --daemonize yes --pidfile "$RUN/redis.pid" --logfile "$RUN/redis.log"
   wait_port "$REDIS_PORT"
-  node_server market "$MARKET_PORT" ROLE=market
+  node_server market "$MARKET_PORT" ROLE=market TRUST_PROXY=127.0.0.1
   : > "$RUN/upstream.conf"
   for i in $(seq 1 "$n"); do
     local p=$((GW_BASE + i - 1))

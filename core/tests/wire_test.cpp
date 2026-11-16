@@ -32,7 +32,7 @@ Message fromJson(const nlohmann::json& j) {
   if (t == "delta") {
     return DeltaMsg{sym, j.at("seq").get<hoga::Seq>(), j.at("ts"), j.at("side") == "B" ? Side::Bid : Side::Ask, j.at("px"), j.at("qty")};
   }
-  return TradeMsg{sym, j.at("ts"), j.at("px"), j.at("qty"), j.at("aggr") == "B" ? Side::Bid : Side::Ask};
+  return TradeMsg{sym, j.at("ts"), j.at("px"), j.at("qty"), j.at("aggr") == "A" ? Side::Ask : Side::Bid, j.at("aggr") == "N"};
 }
 
 }  // namespace

@@ -34,6 +34,7 @@ struct Trade {
   Qty qty{0};
   Side aggressor{Side::Bid};
   std::int64_t ts{0};
+  bool auction{false};  // 단일가 체결(주도한 쪽 없음)
 };
 
 // 서버 status 메시지(장 구간·매매 방식·VI·단일가 예상 체결). 받기 전에는 phase가 비어 있다.

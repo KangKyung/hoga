@@ -77,6 +77,22 @@ describe('OtpService', () => {
     await expect(otp.verify('u1', code(secret, now.t))).resolves.toHaveProperty('stepUpToken');
   });
 
+  it('concurrent wrong codes cannot skip the lock, and one code is accepted only once', async () => {
+    const now = { t: 1_794_790_000_000 };
+    const otp = make(now);
+    const { secret } = await otp.enroll('u1', 'demo');
+    await otp.confirm('u1', code(secret, now.t));
+    now.t += 30_000;
+    // 동시에 보낸 같은 정답 두 개: 하나만 통과(재사용 방지)
+    const same = await Promise.allSettled([otp.verify('u1', code(secret, now.t)), otp.verify('u1', code(secret, now.t))]);
+    expect(same.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    // 틀린 코드 50개를 한꺼번에: 5번째부터 잠긴다
+    const wrong = await Promise.allSettled(Array.from({ length: 50 }, () => otp.verify('u1', '000000')));
+    const codes = wrong.map((r) => (r.status === 'rejected' ? (r.reason as { code: string }).code : 'ok'));
+    expect(codes.filter((c) => c === 'OTP_INVALID')).toHaveLength(3);
+    expect(codes.filter((c) => c === 'OTP_LOCKED')).toHaveLength(47);
+  });
+
   it('stores the seed encrypted', async () => {
     const store = new InMemoryOtpStore();
     const otp = new OtpService(store, 'k'.repeat(32), 'jwt-secret-xxxxxxxx');

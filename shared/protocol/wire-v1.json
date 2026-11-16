@@ -47,6 +47,20 @@
       "binaryBytes": 18
     },
     {
+      "name": "trade: single-price auction (no aggressor)",
+      "json": {
+        "t": "trade",
+        "sym": "000003",
+        "ts": 1794790800000,
+        "px": 4215,
+        "qty": 3200,
+        "aggr": "N"
+      },
+      "hex": "0330303030303380f5f88e9e34f720801902",
+      "jsonBytes": 79,
+      "binaryBytes": 18
+    },
+    {
       "name": "snapshot: 2 bids, 1 ask",
       "json": {
         "t": "snap",

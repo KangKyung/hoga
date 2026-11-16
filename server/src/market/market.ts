@@ -140,7 +140,8 @@ export class Market {
   uncross(symbol: string): ExecutionResult {
     const state = this.require(symbol);
     const result = state.engine.uncross(this.lastPrice(symbol));
-    this.publish(state, result, 'bid');
+    // 단일가 체결에는 주도한 쪽이 없다(체결 목록·체결강도에 매수로 잡히지 않게)
+    this.publish(state, result, 'auction');
     for (const listener of this.listeners) listener(symbol, result);
     return result;
   }
@@ -283,7 +284,7 @@ export class Market {
     return state;
   }
 
-  private publish(state: SymbolState, result: ExecutionResult, takerSide: 'bid' | 'ask' | null): void {
+  private publish(state: SymbolState, result: ExecutionResult, takerSide: 'bid' | 'ask' | 'auction' | null): void {
     const sym = state.info.code;
     for (const change of result.changes) {
       state.seq += 1;
@@ -312,7 +313,7 @@ export class Market {
           ts: this.now(),
           px: fill.price,
           qty: fill.qty,
-          aggr: toWireSide(takerSide),
+          aggr: takerSide === 'auction' ? 'N' : toWireSide(takerSide),
         };
         this.bus.publish(sym, 'trade', JSON.stringify(msg));
         this.metrics.inc('hoga_market_trades_total', { sym });

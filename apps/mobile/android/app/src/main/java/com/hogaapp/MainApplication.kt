@@ -22,6 +22,8 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // 이전 프로세스가 카메라 앱을 띄운 채 죽었으면 신분증 원본 사진(EXIF 포함)이 캐시에 남는다 → 시작할 때 정리
+    Thread({ com.hogaapp.capture.DocumentCaptureModule.clearLeftovers(this) }, "hoga-cleanup").start()
     loadReactNative(this)
   }
 }

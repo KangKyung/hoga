@@ -346,7 +346,13 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
       return;
     }
     if (type == "error") {
-      stats_.lastError = msg.value("code", std::string{}) + ": " + msg.value("message", std::string{});
+      const auto code = msg.value("code", std::string{});
+      stats_.lastError = code + ": " + msg.value("message", std::string{});
+      if (code == "UNAUTHORIZED") {
+        // 토큰이 만료돼 서버가 사용자 알림을 끊었다 → 상태를 맞추고, 앱이 토큰을 갱신해 다시 인증하도록 알린다
+        stats_.authenticated = false;
+        if (!authToken_.empty() && userListener_) after.push_back([listener = userListener_, text] { listener(text); });
+      }
       return;
     }
     const auto symbol = msg.value("sym", std::string{});
@@ -379,8 +385,9 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
                         msg.at("px").get<Price>(), msg.at("qty").get<Qty>()};
       if (!applyDeltaLocked(symbol, delta)) return;
     } else if (type == "trade") {
-      const Trade trade{msg.at("px").get<Price>(), msg.at("qty").get<Qty>(),
-                        msg.at("aggr").get<std::string>() == "B" ? Side::Bid : Side::Ask, msg.value("ts", std::int64_t{0})};
+      const auto aggr = msg.at("aggr").get<std::string>();
+      const Trade trade{msg.at("px").get<Price>(), msg.at("qty").get<Qty>(), aggr == "A" ? Side::Ask : Side::Bid,
+                        msg.value("ts", std::int64_t{0}), aggr == "N"};
       if (!applyTradeLocked(symbol, trade)) return;
     } else {
       return;
@@ -408,7 +415,7 @@ void MarketClient::handleBinaryLocked(const std::string& bytes, Deferred& after)
         } else if constexpr (std::is_same_v<T, wire::DeltaMsg>) {
           return applyDeltaLocked(m.symbol, Delta{m.seq, m.side, m.price, m.qty});
         } else {
-          return applyTradeLocked(m.symbol, Trade{m.price, m.qty, m.aggressor, m.ts});
+          return applyTradeLocked(m.symbol, Trade{m.price, m.qty, m.aggressor, m.ts, m.auction});
         }
       },
       *decoded);

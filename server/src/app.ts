@@ -64,7 +64,11 @@ function authConfig(config: Config) {
 /** ROLE=all | market. gateway는 createGatewayServer */
 export function createServer(config: Config, options: CreateServerOptions = {}): HogaServer {
   if (config.ROLE === 'gateway') throw new Error('use createGatewayServer for ROLE=gateway');
-  const app = Fastify({ logger: { level: config.LOG_LEVEL }, bodyLimit: 4 * 1024 });
+  const app = Fastify({
+    logger: { level: config.LOG_LEVEL },
+    bodyLimit: 4 * 1024,
+    ...(config.TRUST_PROXY ? { trustProxy: config.TRUST_PROXY.split(',').map((s) => s.trim()) } : {}),
+  });
   const log = app.log;
   const metrics = new Metrics();
   const redisBus = config.REDIS_URL ? new RedisBus(config.REDIS_URL) : undefined;
@@ -207,6 +211,8 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
       await app.listen({ host: config.HOST, port: config.PORT });
       session.start();
       stopSimulator = market.startSimulator(config.SIM_INTERVAL_MS);
+      // gateway들이 복제 장부를 다시 받게 알린다(재시작이면 seq가 처음부터라 그대로 두면 호가가 멈춘다)
+      if (redisBus) bus.publishAdmin('market-started');
     },
     async stop() {
       stopSimulator();
@@ -242,7 +248,15 @@ export function createGatewayServer(config: Config): GatewayServer {
   const bus = new RedisBus(config.REDIS_URL!);
   const loopLag = monitorEventLoopDelay({ resolution: 10 });
   loopLag.enable();
-  const replica = new BookReplica(config.MARKET_URL);
+  // market 재시작이면 클라이언트 장부의 seq도 옛것이라 새 seq를 모두 버린다 → 재접속시켜 새 스냅샷부터.
+  // 종목마다 감지되므로 한 번만(2초 안의 반복은 무시)
+  let lastRestart = 0;
+  const onMarketRestart = () => {
+    if (Date.now() - lastRestart < 2_000) return;
+    lastRestart = Date.now();
+    log.warn({ closed: gateway.disconnectAll('market restart') }, 'market restarted: reconnecting clients');
+  };
+  const replica = new BookReplica(config.MARKET_URL, undefined, undefined, onMarketRestart);
   // 복제 장부를 gateway보다 먼저 구독해, 같은 메시지에서 장부가 먼저 바뀐 뒤 클라이언트로 나간다
   bus.subscribeAll((symbol, kind, payload) => {
     if (kind === 'book') replica.onBook(symbol, payload);
@@ -260,6 +274,7 @@ export function createGatewayServer(config: Config): GatewayServer {
   });
   bus.subscribeAdmin((command) => {
     if (command === 'disconnect') log.warn({ closed: gateway.disconnectAll() }, 'admin: disconnected all clients');
+    if (command === 'market-started') replica.resyncAll();
   });
   let stopReport = () => {};
   let id = config.GATEWAY_ID ?? '';

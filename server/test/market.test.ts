@@ -4,7 +4,7 @@ import { InMemoryBus } from '../src/bus.js';
 import { Market } from '../src/market/market.js';
 import { CORE_SYMBOLS } from '../src/market/symbols.js';
 import { Metrics } from '../src/metrics.js';
-import type { DeltaMessage, SnapshotMessage } from '../src/protocol.js';
+import type { DeltaMessage, SnapshotMessage, TradeMessage } from '../src/protocol.js';
 
 /** 결정적 난수(테스트 재현용) */
 function seeded(seed: number) {
@@ -83,6 +83,22 @@ describe('Market', () => {
     // 20단계만 준 스냅샷이었다면 여기서 5단계만 남는다
     expect(rebuilt.bids).toEqual(market.snapshot('000001').bids);
     expect(rebuilt.bids.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it('단일가 체결은 주도한 쪽이 없는 체결(aggr N)로 나간다', () => {
+    const trades: TradeMessage[] = [];
+    const bus = new InMemoryBus();
+    const m = new Market(bus, new Metrics(), { random: seeded(7), symbols: CORE_SYMBOLS });
+    bus.subscribeAll((_s, kind, payload) => {
+      if (kind === 'trade') trades.push(JSON.parse(payload) as TradeMessage);
+    });
+    m.setMode('000001', 'AUCTION');
+    m.submit('000001', { side: 'bid', type: 'limit', price: 71_300, qty: 5 });
+    m.submit('000001', { side: 'ask', type: 'limit', price: 71_200, qty: 5 });
+    expect(trades).toHaveLength(0); // 단일가 중에는 쌓기만
+    m.uncross('000001');
+    expect(trades.length).toBeGreaterThan(0);
+    expect(trades.every((t) => t.aggr === 'N')).toBe(true);
   });
 
   it('매수 최우선가는 항상 매도 최우선가보다 낮다', () => {

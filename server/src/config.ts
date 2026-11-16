@@ -4,6 +4,12 @@ const schema = z.object({
   /** production이면 공개된 개발용 비밀값을 거부하고, 계좌 개설 인증 코드(devCode)를 응답에 싣지 않는다 */
   NODE_ENV: z.string().optional(),
   HOST: z.string().default('0.0.0.0'),
+  /**
+   * 앞단 프록시(nginx)의 주소. 지정하면 그 주소에서 온 요청만 X-Forwarded-For로 실제 IP를 읽는다
+   * (로그인·계좌 개설 IP 제한용). 비우면 접속한 주소 그대로 — 프록시 뒤에서는 모두 같은 IP가 된다.
+   * 아무 데서나 믿으면(true) 직접 노출된 서버에서 헤더 위조로 IP 제한을 피할 수 있다.
+   */
+  TRUST_PROXY: z.string().optional(),
   PORT: z.coerce.number().int().min(0).max(65535).default(8080),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 

@@ -4,11 +4,12 @@
  * 등록: enroll(시드 발급, 아직 비활성) → confirm(앱에서 만든 코드로 확인해야 활성)
  * 주문: OTP를 켠 사용자는 verify로 받은 단기 "step-up" 토큰(10분)이 있어야 주문할 수 있다.
  * - 시드는 AES-256-GCM으로 암호화해 저장(저장소가 유출돼도 바로 쓸 수 없게)
- * - 5분에 5번 틀리면 5분 잠금
+ * - 5분에 5번 틀리면 5분 잠금. 같은 사용자의 확인은 한 번에 하나씩(동시 요청으로 실패 기록을 덮어써 잠금을 피하지 못하게)
  * - step-up 토큰은 액세스 토큰과 다른 키(파생 키)로 서명해 서로 바꿔 쓸 수 없다
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
+import { KeyedLock } from '../util/keyedLock.js';
 import { signAccessToken, verifyAccessToken } from './jwt.js';
 import { generateSecret, otpauthUrl, verifyCode } from './totp.js';
 
@@ -55,6 +56,7 @@ export const STEP_UP_TTL_SEC = 10 * 60;
 export class OtpService {
   private readonly key: Buffer;
   private readonly stepUpSecret: string;
+  private readonly lock = new KeyedLock();
 
   constructor(
     private readonly store: OtpStore,
@@ -70,7 +72,29 @@ export class OtpService {
     return { enabled: (await this.store.get(userId))?.active ?? false };
   }
 
-  async enroll(userId: string, account: string): Promise<{ secret: string; otpauthUrl: string }> {
+  enroll(userId: string, account: string): Promise<{ secret: string; otpauthUrl: string }> {
+    return this.lock.run(userId, () => this.enrollLocked(userId, account));
+  }
+
+  confirm(userId: string, code: string): Promise<{ enabled: true }> {
+    return this.lock.run(userId, () => this.confirmLocked(userId, code));
+  }
+
+  /** 주문 전 2단계 인증 → 단기 step-up 토큰 */
+  verify(userId: string, code: string): Promise<{ stepUpToken: string; expiresIn: number }> {
+    return this.lock.run(userId, () => this.verifyLocked(userId, code));
+  }
+
+  disable(userId: string, code: string): Promise<void> {
+    return this.lock.run(userId, () => this.disableLocked(userId, code));
+  }
+
+  /** 관리자 초기화(본인 확인은 운영 절차). 다음 주문부터 OTP 없이, 다시 등록할 수 있다 */
+  reset(userId: string): Promise<void> {
+    return this.lock.run(userId, () => this.store.delete(userId));
+  }
+
+  private async enrollLocked(userId: string, account: string): Promise<{ secret: string; otpauthUrl: string }> {
     const existing = await this.store.get(userId);
     if (existing?.active) throw new OtpError('OTP_ALREADY_ENABLED');
     const secret = generateSecret();
@@ -78,7 +102,7 @@ export class OtpService {
     return { secret, otpauthUrl: otpauthUrl(secret, account) };
   }
 
-  async confirm(userId: string, code: string): Promise<{ enabled: true }> {
+  private async confirmLocked(userId: string, code: string): Promise<{ enabled: true }> {
     const record = await this.store.get(userId);
     if (!record) throw new OtpError('OTP_NOT_ENROLLED');
     if (record.active) throw new OtpError('OTP_ALREADY_ENABLED');
@@ -88,8 +112,7 @@ export class OtpService {
     return { enabled: true };
   }
 
-  /** 주문 전 2단계 인증 → 단기 step-up 토큰 */
-  async verify(userId: string, code: string): Promise<{ stepUpToken: string; expiresIn: number }> {
+  private async verifyLocked(userId: string, code: string): Promise<{ stepUpToken: string; expiresIn: number }> {
     const record = await this.store.get(userId);
     if (!record?.active) throw new OtpError('OTP_NOT_ENABLED');
     await this.check(userId, record, code);
@@ -97,15 +120,10 @@ export class OtpService {
     return { stepUpToken: signAccessToken(this.stepUpSecret, { sub: userId, name: 'otp' }, STEP_UP_TTL_SEC, now), expiresIn: STEP_UP_TTL_SEC };
   }
 
-  async disable(userId: string, code: string): Promise<void> {
+  private async disableLocked(userId: string, code: string): Promise<void> {
     const record = await this.store.get(userId);
     if (!record?.active) throw new OtpError('OTP_NOT_ENABLED');
     await this.check(userId, record, code);
-    await this.store.delete(userId);
-  }
-
-  /** 관리자 초기화(본인 확인은 운영 절차). 다음 주문부터 OTP 없이, 다시 등록할 수 있다 */
-  async reset(userId: string): Promise<void> {
     await this.store.delete(userId);
   }
 

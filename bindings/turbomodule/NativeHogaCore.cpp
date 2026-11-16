@@ -218,7 +218,7 @@ jsi::Array NativeHogaCore::getTrades(jsi::Runtime& rt, jsi::String symbol, doubl
     jsi::Object t(rt);
     t.setProperty(rt, "price", static_cast<double>(trades[i].price));
     t.setProperty(rt, "qty", static_cast<double>(trades[i].qty));
-    t.setProperty(rt, "aggressor", str(rt, trades[i].aggressor == hoga::Side::Bid ? "bid" : "ask"));
+    t.setProperty(rt, "aggressor", str(rt, trades[i].auction ? "none" : trades[i].aggressor == hoga::Side::Bid ? "bid" : "ask"));
     t.setProperty(rt, "ts", static_cast<double>(trades[i].ts));
     out.setValueAtIndex(rt, i, std::move(t));
   }

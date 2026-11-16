@@ -379,6 +379,21 @@ describe('사용자별 주문', () => {
     me.ws.close();
   });
 
+  it('멱등 키 보관 시간이 지나도 같은 키로 주문이 두 번 실행되지 않는다', async () => {
+    const server = await start({ IDEMPOTENCY_TTL_MS: '1000' });
+    const key = randomUUID();
+    const first = await postOrder(server, { symbol: '000002', side: 'bid', price: 18_000, qty: 10 }, key);
+    expect(first.body.status).toBe('NEW');
+    await new Promise((r) => setTimeout(r, 1_100)); // 멱등 키 저장소에서는 잊혔다
+    const again = await postOrder(server, { symbol: '000002', side: 'bid', price: 18_000, qty: 10 }, key);
+    expect(again.headers.get('idempotent-replayed')).toBe('true');
+    expect(again.body.orderId).toBe(first.body.orderId);
+    // 다른 내용으로 재사용하면 거부(첫 주문의 예약·기록을 덮어쓰지 않게)
+    const other = await postOrder(server, { symbol: '000002', side: 'bid', price: 18_000, qty: 1 }, key);
+    expect(other).toMatchObject({ status: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } });
+    expect(server.market.snapshot('000002').bids.find(([px]) => px === 18_000)?.[1]).toBe(10);
+  });
+
   it('잘못된 토큰으로 WS 인증하면 UNAUTHORIZED', async () => {
     const server = await start();
     const client = await connect(server);

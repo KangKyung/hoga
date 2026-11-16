@@ -119,7 +119,7 @@ std::string encode(const Message& message) {
           putSigned(out, m.ts);
           putSigned(out, m.price);
           putSigned(out, m.qty);
-          out.push_back(static_cast<char>(m.aggressor == Side::Bid ? 0 : 1));
+          out.push_back(static_cast<char>(m.auction ? 2 : m.aggressor == Side::Bid ? 0 : 1));
         }
       },
       message);
@@ -146,7 +146,7 @@ std::string toJson(const Message& message) {
                  ",\"side\":" + side(m.side) + ",\"px\":" + n(m.price) + ",\"qty\":" + n(m.qty) + "}";
         } else {
           return "{\"t\":\"trade\"" + head + "\"ts\":" + n(m.ts) + ",\"px\":" + n(m.price) + ",\"qty\":" +
-                 n(m.qty) + ",\"aggr\":" + side(m.aggressor) + "}";
+                 n(m.qty) + ",\"aggr\":" + (m.auction ? std::string("\"N\"") : side(m.aggressor)) + "}";
         }
       },
       message);
@@ -177,9 +177,13 @@ std::optional<Message> decode(std::string_view bytes) {
     }
     case Type::Trade: {
       TradeMsg m;
-      if (!r.symbol(m.symbol) || !r.safe(m.ts) || !r.safe(m.price) || !r.safe(m.qty) || !r.side(m.aggressor) || !r.done()) {
+      std::uint8_t aggr = 0;
+      if (!r.symbol(m.symbol) || !r.safe(m.ts) || !r.safe(m.price) || !r.safe(m.qty) || !r.byte(aggr) || aggr > 2 ||
+          !r.done()) {
         return std::nullopt;
       }
+      m.auction = aggr == 2;
+      m.aggressor = aggr == 1 ? Side::Ask : Side::Bid;
       return m;
     }
   }

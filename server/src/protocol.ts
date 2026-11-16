@@ -57,8 +57,8 @@ export interface TradeMessage {
   ts: number;
   px: number;
   qty: number;
-  /** 체결을 일으킨 쪽 */
-  aggr: WireSide;
+  /** 체결을 일으킨 쪽. N = 단일가 체결(모인 주문을 한 가격에 맞춰 주도한 쪽이 없다) */
+  aggr: WireSide | 'N';
 }
 
 export interface ErrorMessage {

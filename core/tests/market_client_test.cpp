@@ -376,6 +376,17 @@ TEST(MarketClient, LogoutSendsUnauthAndDropsLateOrderEvents) {
   EXPECT_TRUE(events.empty());
   f.transport->message(R"({"t":"unauthed"})");
 
+  // 다시 로그인 → 토큰 만료로 서버가 인증을 끊으면 상태를 내리고 앱에 알린다(토큰 갱신 → 재인증)
+  f.client->setAuthToken("token-2");
+  f.transport->message(R"({"t":"authed","userId":"u-demo"})");
+  EXPECT_TRUE(f.client->stats().authenticated);
+  f.transport->message(R"({"t":"error","code":"UNAUTHORIZED","message":"access token expired"})");
+  EXPECT_FALSE(f.client->stats().authenticated);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_NE(events[0].find("UNAUTHORIZED"), std::string::npos);
+  f.client->setAuthToken("");
+  events.clear();
+
   // 이미 빈 토큰이면 다시 보내지 않는다
   const auto sent = f.transport->sent.size();
   f.client->setAuthToken("");

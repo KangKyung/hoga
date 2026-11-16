@@ -107,6 +107,14 @@ function Main({userName}: {userName: string}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 서버가 WS 인증을 거절하면(토큰 만료: 백그라운드에서 갱신 타이머가 늦은 경우 등) 토큰을 갱신해 다시 인증
+  useEffect(() => {
+    const sub = hogaCore.onAuthRejected(() => {
+      if (session.getState().status === 'signedIn') void session.tokens.refresh();
+    });
+    return () => sub.remove();
+  }, []);
+
   // 체결 알림(서버 → C++ → JS 이벤트)
   useEffect(() => {
     const sub = hogaCore.onOrderEvent((e: OrderEvent) => {

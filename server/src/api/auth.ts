@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { AuthError, type AuthService } from '../auth/auth.js';
 import { JwtError } from '../auth/jwt.js';
+import { rateLimitKey } from '../util/ip.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -25,7 +26,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
     const body = loginBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'BAD_REQUEST' });
     try {
-      return await auth.login(body.data.username, body.data.password, request.ip);
+      return await auth.login(body.data.username, body.data.password, rateLimitKey(request.ip));
     } catch (err) {
       if (err instanceof AuthError) return reply.code(STATUS[err.code]).send({ error: err.code });
       throw err;

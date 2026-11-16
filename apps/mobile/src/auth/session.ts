@@ -47,6 +47,11 @@ class SessionManager {
   private access: string | null = null;
   private refreshing: Promise<string | null> | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * 로그아웃할 때마다 올린다. 진행 중이던 로그인·토큰 갱신의 응답이 로그아웃 뒤에 오면
+   * 세대가 달라 받아들이지 않는다(그대로 받으면 로그아웃했는데 다시 로그인 상태가 된다).
+   */
+  private epoch = 0;
 
   getState = () => this.state;
   subscribe = (listener: () => void) => {
@@ -93,11 +98,12 @@ class SessionManager {
 
   async login(username: string, password: string, enableLock: boolean) {
     try {
+      const epoch = this.epoch;
       const {data} = await request<TokenResponse>('/auth/login', {
         method: 'POST',
         body: {username, password},
       });
-      await this.accept(data);
+      if (!(await this.accept(data, epoch))) return;
       track('login', {method: 'password', lock_enabled: enableLock});
       if (enableLock) {
         await secureStore.set(LOCK_KEY, hogaCore.randomId(), {
@@ -123,6 +129,8 @@ class SessionManager {
   }
 
   async logout() {
+    this.epoch += 1;
+    clearTimeout(this.refreshTimer);
     const refreshToken = await secureStore.get(REFRESH_KEY).catch(() => null);
     if (refreshToken) {
       await request('/auth/logout', {
@@ -162,6 +170,7 @@ class SessionManager {
   }
 
   private async rotate(): Promise<string | null> {
+    const epoch = this.epoch;
     const refreshToken = await secureStore.get(REFRESH_KEY);
     if (!refreshToken) return null;
     try {
@@ -169,9 +178,9 @@ class SessionManager {
         method: 'POST',
         body: {refreshToken},
       });
-      await this.accept(data);
-      return data.accessToken;
+      return (await this.accept(data, epoch)) ? data.accessToken : null;
     } catch (e) {
+      if (epoch !== this.epoch) return null; // 그 사이 로그아웃했다
       if (e instanceof HttpError && e.status === 401) {
         await this.clear();
         this.set({status: 'signedOut', message: 'session.expired'});
@@ -180,16 +189,25 @@ class SessionManager {
     }
   }
 
-  private async accept(data: TokenResponse) {
+  /** 요청을 보낸 뒤 로그아웃했으면 false(받은 토큰을 버린다) */
+  private async accept(data: TokenResponse, epoch: number): Promise<boolean> {
+    if (epoch !== this.epoch) return false;
     await secureStore.set(REFRESH_KEY, data.refreshToken); // 먼저 저장
+    if (epoch !== this.epoch) {
+      // 저장하는 사이 로그아웃이 시작됐다 → 방금 저장한 토큰도 지운다
+      await secureStore.remove(REFRESH_KEY).catch(() => {});
+      return false;
+    }
     this.access = data.accessToken;
     hogaCore.setAuthToken(data.accessToken);
     clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => this.tokens.refresh(), Math.max(10, data.expiresIn - 60) * 1000);
     this.set({status: 'signedIn', user: data.user});
+    return true;
   }
 
   private async clear() {
+    this.epoch += 1;
     clearTimeout(this.refreshTimer);
     this.access = null;
     hogaCore.setAuthToken('');

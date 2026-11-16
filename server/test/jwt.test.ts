@@ -43,6 +43,15 @@ describe('로그인 실패 제한 · 운영 설정', () => {
     await expect(service.login('demo', 'hoga-demo-1234', '10.0.0.2')).resolves.toHaveProperty('accessToken');
   });
 
+  it('동시에 보낸 틀린 로그인도 제한 횟수를 넘겨 확인하지 않는다', async () => {
+    const service = auth();
+    const results = await Promise.allSettled(Array.from({ length: 30 }, () => service.login('demo', 'wrong', '10.0.0.9')));
+    const codes = results.map((r) => (r.status === 'rejected' ? (r.reason as { code: string }).code : 'ok'));
+    // 사용자 이름 기준 3회만 실제로 확인하고 나머지는 바로 거절
+    expect(codes.filter((c) => c === 'INVALID_CREDENTIALS')).toHaveLength(3);
+    expect(codes.filter((c) => c === 'TOO_MANY_ATTEMPTS')).toHaveLength(27);
+  });
+
   it('NODE_ENV=production이면 공개된 개발용 비밀값으로 시작하지 않는다', () => {
     expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(/JWT_SECRET, OTP_ENC_KEY, ADMIN_TOKEN/);
     expect(() =>

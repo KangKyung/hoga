@@ -74,7 +74,7 @@ export function encode(msg: MarketMessage): Buffer {
       w.varint(msg.ts);
       w.varint(msg.px);
       w.varint(msg.qty);
-      w.byte(msg.aggr === 'B' ? 0 : 1);
+      w.byte(msg.aggr === 'B' ? 0 : msg.aggr === 'A' ? 1 : 2);
       break;
   }
   return w.done();
@@ -119,7 +119,14 @@ export function decode(buf: Buffer): MarketMessage {
       return { t: 'delta', sym, seq, ts, side: s, px: varint(), qty: varint() };
     }
     case 3:
-      return { t: 'trade', sym, ts: varint(), px: varint(), qty: varint(), aggr: side() };
+    {
+      const ts = varint();
+      const px = varint();
+      const qty = varint();
+      const a = buf[pos++];
+      if (a === undefined || a > 2) throw new Error('bad aggressor');
+      return { t: 'trade', sym, ts, px, qty, aggr: a === 0 ? 'B' : a === 1 ? 'A' : 'N' };
+    }
     default:
       throw new Error(`unknown type ${buf[0]}`);
   }

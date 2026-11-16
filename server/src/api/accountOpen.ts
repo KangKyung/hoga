@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import type { Ledger } from '../account/ledger.js';
 import type { UserStore } from '../auth/users.js';
+import { rateLimitKey } from '../util/ip.js';
 
 /**
  * 비대면 계좌 개설(모의). 웹 화면(server/web/account-open)이 단계별로 부르고, 신분증 사진은
@@ -18,7 +19,7 @@ import type { UserStore } from '../auth/users.js';
  * - 신분증 이미지는 형식·크기만 확인하고 저장하지 않는다(모의 진위 확인). 해시만 남긴다.
  * - 화면·응답에는 가린 값만(홍*동, 1990-**-**, 010-****-5678).
  * - 휴대폰 인증 코드는 실제로 보내지 않고 개발용으로 응답에 실어 준다(devCode). 운영(NODE_ENV=production)에서는 싣지 않는다.
- * - 신청서 생성은 IP당 10분에 10건, 진행 중 신청서는 전체 1만 건까지(무한 생성으로 메모리를 키우지 못하게).
+ * - 신청서 생성은 IP(IPv6는 /64)당 10분에 10건, 진행 중 신청서는 전체 1만 건까지(무한 생성으로 메모리를 키우지 못하게).
  */
 export type Step = 'terms' | 'profile' | 'phone' | 'idcard' | 'done';
 const ORDER: Step[] = ['terms', 'profile', 'phone', 'idcard', 'done'];
@@ -253,7 +254,7 @@ export function registerAccountOpenRoutes(app: FastifyInstance, service: Account
     reply.code('error' in result ? (result.error === 'WRONG_STEP' ? 409 : 422) : 200).send(result);
 
   app.post('/account-open', async (request, reply) => {
-    const created = service.create(request.ip);
+    const created = service.create(rateLimitKey(request.ip));
     return 'error' in created ? reply.code(429).send(created) : created;
   });
   app.get<{ Params: { id: string } }>('/account-open/:id', async (request, reply) => {

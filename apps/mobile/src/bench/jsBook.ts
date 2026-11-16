@@ -11,7 +11,7 @@ type WireLevel = [number, number];
 type MarketMessage =
   | {t: 'snap'; sym: string; seq: number; bids: WireLevel[]; asks: WireLevel[]}
   | {t: 'delta'; sym: string; seq: number; side: 'B' | 'A'; px: number; qty: number}
-  | {t: 'trade'; sym: string; ts: number; px: number; qty: number; aggr: 'B' | 'A'};
+  | {t: 'trade'; sym: string; ts: number; px: number; qty: number; aggr: 'B' | 'A' | 'N'};
 
 export type ApplyResult = 'applied' | 'gap' | 'ignored' | 'trade';
 
