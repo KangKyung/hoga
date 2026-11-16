@@ -69,6 +69,22 @@ describe('Market', () => {
     expect(rebuilt.asks).toEqual(latest.asks);
   });
 
+  it('기본(WebSocket) 스냅샷은 전체 호가라 위쪽이 빠져도 아래 호가가 클라이언트에 남는다', () => {
+    const { market, deltas } = setup();
+    const ids: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      ids.push(market.submit('000001', { side: 'bid', type: 'limit', price: 70_000 - i * 100, qty: 1 }).id);
+    }
+    const start = market.snapshot('000001');
+    expect(start.bids.length).toBeGreaterThanOrEqual(30);
+    const from = deltas.length;
+    for (const id of ids.slice(0, 15)) market.cancel('000001', id);
+    const rebuilt = applyAll(start, deltas.slice(from));
+    // 20단계만 준 스냅샷이었다면 여기서 5단계만 남는다
+    expect(rebuilt.bids).toEqual(market.snapshot('000001').bids);
+    expect(rebuilt.bids.length).toBeGreaterThanOrEqual(15);
+  });
+
   it('매수 최우선가는 항상 매도 최우선가보다 낮다', () => {
     const { market } = setup();
     market.warmUp(500);

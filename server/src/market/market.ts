@@ -54,6 +54,9 @@ export type ExecutionListener = (symbol: string, result: ExecutionResult) => voi
  * 붙여 버스로 내보낸다. Node 이벤트 루프 한 스레드에서만 실행되므로 순서가 꼬이지 않는다.
  * 종목이 많아지면 종목 코드 기준으로 이 프로세스를 나눈다(샤딩).
  */
+/** 전체 호가(가격제한폭 안의 모든 가격) */
+export const FULL_DEPTH = Number.MAX_SAFE_INTEGER;
+
 export class Market {
   private readonly states = new Map<string, SymbolState>();
   private readonly listeners = new Set<ExecutionListener>();
@@ -151,7 +154,12 @@ export class Market {
     }));
   }
 
-  snapshot(symbol: string, depth = 20): SnapshotMessage {
+  /**
+   * depth를 비우면 전체 호가. WebSocket 스냅샷은 반드시 전체여야 한다: 변경분(delta)은 깊이와 상관없이
+   * 모든 가격에 대해 오므로, 일부만 준 스냅샷 위에 변경분을 쌓으면 위쪽이 빠질 때 아래에서 올라와야 할
+   * 호가가 클라이언트에 영영 없다(seq는 이어져 재동기화도 일어나지 않는다).
+   */
+  snapshot(symbol: string, depth = FULL_DEPTH): SnapshotMessage {
     const state = this.require(symbol);
     return {
       t: 'snap',

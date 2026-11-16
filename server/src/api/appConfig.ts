@@ -52,8 +52,11 @@ const DEFAULT_MESSAGE: Record<Lang, string> = {
   th: 'ระบบอยู่ระหว่างการปรับปรุง',
 };
 
-/** 점검 중에 막는 API(앞부분 일치) */
-const BLOCKED_PREFIXES = ['/orders', '/account', '/auth/', '/otp/'];
+/**
+ * 점검 중에 막는 API. 경로 조각 단위로 비교한다('/account'는 '/account', '/account/...'만).
+ * 계좌 개설도 계정·계좌를 만드는 쓰기라 함께 막는다.
+ */
+const BLOCKED_PREFIXES = ['/orders', '/account', '/account-open', '/auth'];
 
 export class AppConfigStore {
   state: AppConfigState;
@@ -85,8 +88,13 @@ export class AppConfigStore {
     return this.state;
   }
 
-  blocks(url: string): boolean {
-    return this.state.maintenance.active && BLOCKED_PREFIXES.some((p) => url.startsWith(p));
+  /**
+   * route: 라우터가 찾은 라우트 패턴(예: '/orders/:key'). 원문 URL을 쓰면 '/%6Frders'처럼
+   * 퍼센트 인코딩한 경로가 비교를 피해 가고 라우터는 디코딩해 '/orders'로 처리한다.
+   */
+  blocks(route: string | undefined): boolean {
+    if (!this.state.maintenance.active || !route) return false;
+    return BLOCKED_PREFIXES.some((p) => route === p || route.startsWith(`${p}/`));
   }
 
   /** 앱이 받는 모양: 이 앱 버전에 무엇을 해야 하는지까지 계산해서 준다 */
@@ -110,7 +118,8 @@ export class AppConfigStore {
 
 export function registerAppConfigRoutes(app: FastifyInstance, store: AppConfigStore): void {
   app.addHook('onRequest', async (request, reply) => {
-    if (store.blocks(request.url)) {
+    // onRequest는 라우팅 뒤에 불리므로 routeOptions.url이 정해져 있다(없는 경로면 undefined → 404)
+    if (store.blocks(request.routeOptions.url)) {
       return reply.code(503).send({ error: 'MAINTENANCE', until: store.state.maintenance.until });
     }
   });

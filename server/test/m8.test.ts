@@ -293,6 +293,11 @@ describe('강제 업데이트 · 점검', () => {
     expect((await call(server, 'POST', '/auth/login', { username: 'demo', password: 'x' })).status).toBe(503);
     expect((await config(server, '0.8.0')).body.maintenance).toMatchObject({ active: true, until: 1_900_000_000_000 });
     expect((await call(server, 'GET', '/symbols')).status).toBe(200);
+    // 퍼센트 인코딩한 경로로도 피해 갈 수 없다(라우터는 디코딩해 같은 라우트로 처리한다)
+    const encoded = await call(server, 'POST', '/%6Frders', {}, { authorization: `Bearer ${demoToken}` });
+    expect(encoded.status).toBe(503);
+    expect((await call(server, 'GET', '/%61ccount', undefined, { authorization: `Bearer ${demoToken}` })).status).toBe(503);
+    expect((await call(server, 'POST', '/account-open')).status).toBe(503);
     await call(server, 'PUT', '/admin/api/app-config', { maintenance: { active: false } }, ADMIN);
     expect((await call(server, 'GET', '/account', undefined, { authorization: `Bearer ${demoToken}` })).status).toBe(200);
   });
@@ -337,6 +342,22 @@ describe('비대면 계좌 개설', () => {
     expect(login.status).toBe(200);
     const acct = await call(server, 'GET', '/account', undefined, { authorization: `Bearer ${login.body.accessToken as string}` });
     expect(acct.body).toMatchObject({ cash: 10_000_000, accountNo: done.body.accountNo, positions: [] });
+  });
+
+  it('신청서는 IP당 10분에 10건까지, 운영 설정에서는 인증 코드를 응답에 싣지 않는다', async () => {
+    const server = await start();
+    for (let i = 0; i < 10; i++) expect((await call(server, 'POST', '/account-open')).status).toBe(200);
+    expect(await call(server, 'POST', '/account-open')).toEqual({ status: 429, body: { error: 'TOO_MANY_APPLICATIONS' } });
+
+    const prod = await start({ NODE_ENV: 'production', JWT_SECRET: 'p'.repeat(32), OTP_ENC_KEY: 'q'.repeat(32), ADMIN_TOKEN: 'r'.repeat(24) });
+    const { id, token: appToken } = (await call(prod, 'POST', '/account-open')).body as { id: string; token: string };
+    const h = { 'x-application-token': appToken };
+    const step = (path: string, body?: unknown) => call(prod, 'POST', `/account-open/${id}${path}`, body ?? {}, h);
+    await step('/terms', { required: true, privacy: true });
+    await step('/profile', { name: '김신규', birth: '19900101', phone: '01012345678', username: 'newbie02' });
+    const sent = await step('/phone/send');
+    expect(sent.body).toMatchObject({ sent: true });
+    expect(sent.body).not.toHaveProperty('devCode');
   });
 
   it('토큰이 틀리면 신청서가 없는 것과 같다(404), 이어서 진행하면 단계가 남아 있다', async () => {

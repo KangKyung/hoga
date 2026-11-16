@@ -26,6 +26,9 @@ import okio.ByteString
  * - callbackLock: C++로 콜백을 넘길 때와 release()에서만 쓴다. release() 후에는 콜백이 C++로 가지 않는다.
  * - 소켓 조작(connect/send/close)은 callbackLock을 잡지 않는다. C++가 자기 락을 잡은 채
  *   send를 부를 수 있기 때문이다.
+ * - C++가 부른 함수 안에서 C++로 바로 콜백하지 않는다(잘못된 URL 등). C++는 자기 락을 쥔 채
+ *   connect/httpGet을 부르므로, 같은 스레드에서 콜백하면 그 락을 다시 잡아 교착된다.
+ *   이런 결과는 타이머 스레드로 넘겨 나중에 전달한다(iOS는 dispatch_async로 같은 처리).
  */
 @Keep
 class HogaTransport(nativePtr: Long) {
@@ -40,7 +43,7 @@ class HogaTransport(nativePtr: Long) {
         try {
           Request.Builder().url(url).build()
         } catch (e: IllegalArgumentException) {
-          deliver { ptr -> nativeOnClose(ptr, token, ABNORMAL_CLOSURE, "invalid url") }
+          deliverLater { ptr -> nativeOnClose(ptr, token, ABNORMAL_CLOSURE, "invalid url") }
           return
         }
     socket = client.newWebSocket(request, Listener(token))
@@ -64,7 +67,7 @@ class HogaTransport(nativePtr: Long) {
         try {
           Request.Builder().url(url).get().build()
         } catch (e: IllegalArgumentException) {
-          deliver { ptr -> nativeOnHttp(ptr, requestId, 0, "") }
+          deliverLater { ptr -> nativeOnHttp(ptr, requestId, 0, "") }
           return
         }
     httpClient
@@ -92,6 +95,11 @@ class HogaTransport(nativePtr: Long) {
   fun release() {
     synchronized(callbackLock) { nativePtr = 0 }
     close(GOING_AWAY, "released")
+  }
+
+  /** 호출한 C++ 스레드(락을 쥐고 있을 수 있다)에서 벗어나 전달한다 */
+  private fun deliverLater(block: (Long) -> Unit) {
+    timers.execute { deliver(block) }
   }
 
   private inline fun deliver(block: (Long) -> Unit) {

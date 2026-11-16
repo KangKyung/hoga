@@ -17,7 +17,8 @@ import type { UserStore } from '../auth/users.js';
  * - 30분 동안 움직임이 없으면 신청서를 지운다.
  * - 신분증 이미지는 형식·크기만 확인하고 저장하지 않는다(모의 진위 확인). 해시만 남긴다.
  * - 화면·응답에는 가린 값만(홍*동, 1990-**-**, 010-****-5678).
- * - 휴대폰 인증 코드는 실제로 보내지 않고 개발용으로 응답에 실어 준다(devCode).
+ * - 휴대폰 인증 코드는 실제로 보내지 않고 개발용으로 응답에 실어 준다(devCode). 운영(NODE_ENV=production)에서는 싣지 않는다.
+ * - 신청서 생성은 IP당 10분에 10건, 진행 중 신청서는 전체 1만 건까지(무한 생성으로 메모리를 키우지 못하게).
  */
 export type Step = 'terms' | 'profile' | 'phone' | 'idcard' | 'done';
 const ORDER: Step[] = ['terms', 'profile', 'phone', 'idcard', 'done'];
@@ -32,12 +33,23 @@ interface Application {
   phone?: { code: string; sentAt: number; sends: number; attempts: number };
   idCardHash?: string;
   accountNo?: string;
+  completing?: boolean;
 }
 
 const TTL_MS = 30 * 60 * 1000;
 const MAX_SENDS = 5;
 const MAX_CODE_ATTEMPTS = 5;
 const CODE_TTL_MS = 3 * 60 * 1000;
+const MAX_APPLICATIONS = 10_000;
+const CREATE_PER_IP = 10;
+const CREATE_WINDOW_MS = 10 * 60 * 1000;
+/** 만료 정리는 이 간격으로만(요청마다 전체를 훑지 않게) */
+const SWEEP_EVERY_MS = 10_000;
+
+export interface AccountOpenOptions {
+  /** 인증 코드를 응답에 실을지(개발·시연용) */
+  exposeDevCode: boolean;
+}
 /** 신분증 JPEG 최대 크기(디코딩 후) */
 export const ID_CARD_MAX_BYTES = 1_500_000;
 
@@ -85,16 +97,23 @@ function isJpeg(buf: Buffer): boolean {
 
 export class AccountOpenService {
   private readonly apps = new Map<string, Application>();
+  private readonly createdByIp = new Map<string, number[]>();
   private seq = 100;
+  private lastSweep = 0;
 
   constructor(
     private readonly users: UserStore,
     private readonly ledger: Ledger,
     private readonly now: () => number = Date.now,
+    private readonly options: AccountOpenOptions = { exposeDevCode: true },
   ) {}
 
-  create() {
+  create(ip = 'unknown') {
     this.sweep();
+    const nowMs = this.now();
+    const recent = (this.createdByIp.get(ip) ?? []).filter((t) => nowMs - t < CREATE_WINDOW_MS);
+    if (recent.length >= CREATE_PER_IP || this.apps.size >= MAX_APPLICATIONS) return { error: 'TOO_MANY_APPLICATIONS' } as const;
+    this.createdByIp.set(ip, [...recent, nowMs]);
     const token = randomBytes(32).toString('base64url');
     const app: Application = { id: randomUUID(), tokenHash: hash(token), step: 'terms', updatedAt: this.now(), marketing: false };
     this.apps.set(app.id, app);
@@ -106,6 +125,11 @@ export class AccountOpenService {
     this.sweep();
     const app = this.apps.get(id);
     if (!app || !token) return undefined;
+    // 정리 주기 사이에 만료된 신청서도 쓰지 못하게
+    if (app.updatedAt < this.now() - TTL_MS) {
+      this.apps.delete(id);
+      return undefined;
+    }
     const given = hash(token);
     return timingSafeEqual(given, app.tokenHash) ? app : undefined;
   }
@@ -160,7 +184,8 @@ export class AccountOpenService {
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     app.phone = { code, sentAt: this.now(), sends, attempts: 0 };
     app.updatedAt = this.now();
-    return { sent: true, to: maskPhone(app.profile!.phone), expiresInSec: CODE_TTL_MS / 1000, devCode: code };
+    const sent = { sent: true, to: maskPhone(app.profile!.phone), expiresInSec: CODE_TTL_MS / 1000 };
+    return this.options.exposeDevCode ? { ...sent, devCode: code } : sent;
   }
 
   verifyCode(app: Application, code: string) {
@@ -183,13 +208,20 @@ export class AccountOpenService {
     return { ...this.view(app), bytes: buf.length };
   }
 
-  complete(app: Application, raw: unknown) {
+  async complete(app: Application, raw: unknown) {
     if (app.step !== 'done' || !app.profile) return { error: 'WRONG_STEP' } as const;
-    if (app.accountNo) return { error: 'ALREADY_DONE' } as const;
+    if (app.accountNo || app.completing) return { error: 'ALREADY_DONE' } as const;
     const parsed = completeBody.safeParse(raw);
     if (!parsed.success) return { error: 'INVALID_PASSWORD' } as const;
     const userId = `u-${app.profile.username}`;
-    const created = this.users.add({ id: userId, username: app.profile.username, name: app.profile.name }, parsed.data.password);
+    // 비밀번호 해시(비동기)를 기다리는 동안 같은 신청서로 다시 완료를 부르지 못하게
+    app.completing = true;
+    let created;
+    try {
+      created = await this.users.add({ id: userId, username: app.profile.username, name: app.profile.name }, parsed.data.password);
+    } finally {
+      app.completing = false;
+    }
     if (!created) return { error: 'USERNAME_TAKEN' } as const;
     app.accountNo = `5001-20-${String(++this.seq).padStart(6, '0')}`;
     // 모의 입금 1,000만 원(실제 입금 절차 대신)
@@ -199,8 +231,12 @@ export class AccountOpenService {
   }
 
   private sweep() {
-    const cutoff = this.now() - TTL_MS;
+    const nowMs = this.now();
+    if (nowMs - this.lastSweep < SWEEP_EVERY_MS) return;
+    this.lastSweep = nowMs;
+    const cutoff = nowMs - TTL_MS;
     for (const [id, app] of this.apps) if (app.updatedAt < cutoff) this.apps.delete(id);
+    for (const [ip, times] of this.createdByIp) if (times.every((t) => nowMs - t >= CREATE_WINDOW_MS)) this.createdByIp.delete(ip);
   }
 }
 
@@ -216,7 +252,10 @@ export function registerAccountOpenRoutes(app: FastifyInstance, service: Account
   const send = (reply: FastifyReply, result: object) =>
     reply.code('error' in result ? (result.error === 'WRONG_STEP' ? 409 : 422) : 200).send(result);
 
-  app.post('/account-open', async () => service.create());
+  app.post('/account-open', async (request, reply) => {
+    const created = service.create(request.ip);
+    return 'error' in created ? reply.code(429).send(created) : created;
+  });
   app.get<{ Params: { id: string } }>('/account-open/:id', async (request, reply) => {
     const found = load(request, reply);
     return found ? service.view(found) : reply;
@@ -257,6 +296,6 @@ export function registerAccountOpenRoutes(app: FastifyInstance, service: Account
   );
   app.post<{ Params: { id: string } }>('/account-open/:id/complete', async (request, reply) => {
     const found = load(request, reply);
-    return found ? send(reply, service.complete(found, request.body)) : reply;
+    return found ? send(reply, await service.complete(found, request.body)) : reply;
   });
 }

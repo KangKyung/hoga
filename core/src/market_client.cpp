@@ -212,8 +212,15 @@ void MarketClient::sendAuthLocked() {
 
 void MarketClient::setAuthToken(std::string token) {
   std::lock_guard lock(mutex_);
+  const bool hadToken = !authToken_.empty();
   authToken_ = std::move(token);
   stats_.authenticated = false;
+  if (authToken_.empty()) {
+    // 로그아웃: 연결(시세 구독)은 그대로 두고 서버에 사용자 인증만 풀어 달라고 한다.
+    // 빈 토큰을 그냥 두면 서버는 이 연결을 이전 사용자로 계속 알고 주문 알림을 보낸다.
+    if (hadToken && state_ == ConnectionState::Open) transport_->send(R"({"op":"unauth"})");
+    return;
+  }
   sendAuthLocked();
 }
 
@@ -325,11 +332,17 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
   try {
     const auto type = msg.value("t", std::string{});
     if (type == "order") {
+      // 로그아웃 직후 이미 오고 있던 알림은 버린다(서버가 unauth를 처리하기 전 메시지)
+      if (authToken_.empty()) return;
       if (userListener_) after.push_back([listener = userListener_, text] { listener(text); });
       return;
     }
     if (type == "authed") {
       stats_.authenticated = true;
+      return;
+    }
+    if (type == "unauthed") {
+      stats_.authenticated = false;
       return;
     }
     if (type == "error") {
@@ -442,16 +455,20 @@ void MarketClient::requestSnapshotLocked(const std::string& symbol) {
   if (it == symbols_.end() || it->second.snapshotInFlight) return;
   it->second.snapshotInFlight = true;
 
-  const auto url = options_.httpBaseUrl + "/book/" + escapeSymbol(symbol) +
-                   "?depth=" + std::to_string(options_.snapshotDepth);
+  const auto depth = options_.snapshotDepth == 0 ? std::string{"all"} : std::to_string(options_.snapshotDepth);
+  const auto url = options_.httpBaseUrl + "/book/" + escapeSymbol(symbol) + "?depth=" + depth;
   std::weak_ptr<MarketClient> weak = weak_from_this();
-  transport_->httpGet(url, [weak, symbol](int status, std::string body) {
-    if (auto self = weak.lock()) self->onSnapshotResponse(symbol, status, body);
+  // 요청한 연결 세대를 함께 기억한다: 재연결 뒤 늦게 온 이전 서버의 스냅샷(seq 체계가 다를 수 있다)을 버리기 위해
+  transport_->httpGet(url, [weak, symbol, generation = generation_](int status, std::string body) {
+    if (auto self = weak.lock()) self->onSnapshotResponse(symbol, generation, status, body);
   });
 }
 
-void MarketClient::onSnapshotResponse(const std::string& symbol, int status, const std::string& body) {
+void MarketClient::onSnapshotResponse(const std::string& symbol, std::uint64_t generation, int status,
+                                      const std::string& body) {
   std::lock_guard lock(mutex_);
+  // 재연결로 세대가 바뀌었으면 무시한다. onOpen이 snapshotInFlight를 이미 풀고 장부를 초기화했다
+  if (generation != generation_) return;
   auto it = symbols_.find(symbol);
   if (it == symbols_.end()) return;
   auto& data = it->second;

@@ -199,9 +199,11 @@
       run('phone', function () {
         return api('POST', '/' + app.id + '/phone/send', {}).then(function (r) {
           $('sentTo').textContent = I.t('web.open.sentTo', { to: r.to });
-          // 실제 문자 대신 개발용으로 화면에 보여 준다(모의)
-          $('devCode').textContent = I.t('web.open.devCode', { code: r.devCode });
-          $('devCode').classList.remove('hidden');
+          // 실제 문자 대신 개발용으로 화면에 보여 준다(모의). 운영 설정에서는 서버가 devCode를 주지 않는다
+          if (r.devCode) {
+            $('devCode').textContent = I.t('web.open.devCode', { code: r.devCode });
+            $('devCode').classList.remove('hidden');
+          }
           $('sendCode').textContent = I.t('web.open.resend');
           $('code').focus();
         });

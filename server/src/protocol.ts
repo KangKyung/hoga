@@ -21,6 +21,8 @@ export const clientMessage = z.discriminatedUnion('op', [
   z.object({ op: z.literal('ping'), ts: z.number().optional() }),
   /** 로그인한 사용자의 주문 알림을 받으려면 액세스 토큰으로 인증 */
   z.object({ op: z.literal('auth'), token: z.string().min(10).max(4096) }),
+  /** 로그아웃: 연결은 유지하고(시세 구독 그대로) 사용자 알림만 끊는다 */
+  z.object({ op: z.literal('unauth') }),
 ]);
 export type ClientMessage = z.infer<typeof clientMessage>;
 
@@ -80,6 +82,10 @@ export interface AuthedMessage {
   userId: string;
 }
 
+export interface UnauthedMessage {
+  t: 'unauthed';
+}
+
 /** 내 주문 상태가 바뀔 때(접수·체결·취소) 나에게만 오는 메시지 */
 export interface OrderEventMessage {
   t: 'order';
@@ -120,6 +126,7 @@ export interface StatusMessage {
 
 export type ServerMessage =
   | AuthedMessage
+  | UnauthedMessage
   | OrderEventMessage
   | SnapshotMessage
   | DeltaMessage

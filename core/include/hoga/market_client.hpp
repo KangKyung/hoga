@@ -77,7 +77,8 @@ struct MarketClientOptions {
   std::chrono::milliseconds backoffMax{30'000};
   std::chrono::milliseconds snapshotRetry{1'000};
   std::size_t tradeHistory{50};
-  std::size_t snapshotDepth{50};
+  /** HTTP 재동기화 스냅샷 깊이. 0 = 전체(기본). 변경분은 전체 깊이로 오므로 일부만 받으면 호가가 빠진다 */
+  std::size_t snapshotDepth{0};
   std::int64_t candleIntervalMs{60'000};  // 기본 봉 구간(1분). 더 긴 구간은 읽을 때 묶는다
   std::size_t candleHistory{600};
   std::function<double()> random;         // [0, 1). 기본: 표준 난수
@@ -162,7 +163,7 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   bool applyTradeLocked(const std::string& symbol, const Trade& trade);
   void sendAuthLocked();
   void requestSnapshotLocked(const std::string& symbol);
-  void onSnapshotResponse(const std::string& symbol, int status, const std::string& body);
+  void onSnapshotResponse(const std::string& symbol, std::uint64_t generation, int status, const std::string& body);
   void sendOpLocked(const char* op, const std::vector<std::string>& symbols);
   void requestCandlesLocked(const std::string& symbol);
   void onCandlesResponse(const std::string& symbol, int status, const std::string& body);

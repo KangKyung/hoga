@@ -31,6 +31,8 @@ import kotlin.math.roundToInt
  *   CAMERA 권한을 선언하지 않는다(카메라 앱이 찍는다).
  * - 앨범: Android 13+ 사진 선택기(권한 불필요), 그 아래는 ACTION_GET_CONTENT.
  * - 결과: EXIF 방향대로 세우고 긴 변을 줄여 JPEG로 다시 인코딩(메타데이터가 빠진다). 임시 파일은 바로 지운다.
+ * - 카메라 앱을 띄운 사이 앱 프로세스가 죽으면 결과 콜백이 오지 않아 임시 파일(원본 사진·EXIF)이 남는다.
+ *   그래서 모듈이 만들어질 때(새 프로세스) 이전 임시 파일을 모두 지우고, 모듈이 내려갈 때 진행 중인 파일을 지운다.
  */
 class DocumentCaptureModule(private val context: ReactApplicationContext) :
     NativeDocumentCaptureSpec(context), ActivityEventListener {
@@ -47,6 +49,14 @@ class DocumentCaptureModule(private val context: ReactApplicationContext) :
 
   init {
     context.addActivityEventListener(this)
+    // 새 프로세스(이전 프로세스가 촬영 중 죽었을 수 있다)에서 한 번. 아직 촬영 전이라 지워도 안전하다
+    clearTempFiles()
+  }
+
+  private fun tempDir() = File(context.cacheDir, "idcard")
+
+  private fun clearTempFiles() {
+    tempDir().listFiles()?.forEach { it.delete() }
   }
 
   override fun getName() = NAME
@@ -61,11 +71,12 @@ class DocumentCaptureModule(private val context: ReactApplicationContext) :
     val dim = maxDimension.roundToInt().coerceIn(320, 4096)
     val q = (quality * 100).roundToInt().coerceIn(30, 95)
 
+    var file: File? = null
     try {
       if (source == "camera") {
         if (!isCameraAvailable()) return promise.reject("E_NO_CAMERA", "no camera")
-        val dir = File(context.cacheDir, "idcard").apply { mkdirs() }
-        val file = File.createTempFile("capture", ".jpg", dir)
+        val dir = tempDir().apply { mkdirs() }
+        file = File.createTempFile("capture", ".jpg", dir)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.idcapture", file)
         val intent =
             Intent(MediaStore.ACTION_IMAGE_CAPTURE)
@@ -85,7 +96,13 @@ class DocumentCaptureModule(private val context: ReactApplicationContext) :
       }
     } catch (e: ActivityNotFoundException) {
       pending = null
+      file?.delete()
       promise.reject("E_NO_APP", e.message, e)
+    } catch (e: Exception) {
+      // SecurityException(카메라 앱 정책), IOException(임시 파일) 등: pending을 남기면 이후 촬영이 계속 E_BUSY가 된다
+      pending = null
+      file?.delete()
+      promise.reject("E_CAPTURE", e.message, e)
     }
   }
 
@@ -114,6 +131,8 @@ class DocumentCaptureModule(private val context: ReactApplicationContext) :
 
   override fun invalidate() {
     context.removeActivityEventListener(this)
+    pending?.cameraFile?.delete()
+    pending = null
     worker.shutdown()
     super.invalidate()
   }

@@ -173,7 +173,7 @@ function JsRoutedBook({symbol, collector}: {symbol: string; collector: PerfColle
     const resync = () => {
       if (resyncing) return;
       resyncing = true;
-      fetch(`${SERVER.http}/book/${symbol}?depth=50`)
+      fetch(`${SERVER.http}/book/${symbol}?depth=all`)
         .then(r => r.text())
         .then(text => {
           jsBook.applyRaw(text);

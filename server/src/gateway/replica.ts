@@ -20,7 +20,6 @@ interface SymbolBook {
 
 export type FetchJson = (url: string) => Promise<unknown>;
 
-const DEPTH = 20;
 
 export class BookReplica implements SnapshotProvider {
   private readonly books = new Map<string, SymbolBook>();
@@ -117,7 +116,8 @@ export class BookReplica implements SnapshotProvider {
   snapshot(symbol: string): SnapshotMessage {
     const book = this.books.get(symbol)!;
     const top = (side: Map<number, number>, desc: boolean): WireLevel[] =>
-      [...side.entries()].sort((a, b) => (desc ? b[0] - a[0] : a[0] - b[0])).slice(0, DEPTH);
+      // 전체 호가(변경분이 전체 깊이로 오므로 스냅샷도 전체여야 한다 — Market.snapshot 참고)
+      [...side.entries()].sort((a, b) => (desc ? b[0] - a[0] : a[0] - b[0]));
     return { t: 'snap', sym: symbol, seq: book.seq, ts: this.now(), bids: top(book.bids, true), asks: top(book.asks, false) };
   }
 
@@ -134,8 +134,8 @@ export class BookReplica implements SnapshotProvider {
     book.loading = true;
     this.resyncs += 1;
     try {
-      // 시뮬레이터 호가는 기준가 ±수십 틱 안이라 50단계면 화면에 보낼 20단계를 덮는다
-      const snap = (await this.fetchJson(`${this.marketUrl}/book/${symbol}?depth=50`)) as SnapshotMessage;
+      // 전체 호가를 받아야 변경분만으로 장부를 정확히 이어 갈 수 있다
+      const snap = (await this.fetchJson(`${this.marketUrl}/book/${symbol}?depth=all`)) as SnapshotMessage;
       book.bids = new Map(snap.bids);
       book.asks = new Map(snap.asks);
       book.seq = snap.seq;

@@ -362,6 +362,23 @@ describe('사용자별 주문', () => {
     other.ws.close();
   });
 
+  it('unauth(로그아웃) 뒤에는 같은 연결로 이전 사용자의 주문 알림이 오지 않는다', async () => {
+    const server = await start();
+    const me = await connect(server);
+    me.send({ op: 'auth', token: await tokenFor(server, 'demo') });
+    await me.waitFor(isType('authed'));
+    me.send({ op: 'unauth' });
+    await me.waitFor(isType('unauthed'));
+
+    const order = await postOrder(server, { symbol: '000002', side: 'bid', price: 18_400, qty: 10 }, randomUUID(), 'demo');
+    expect(order.body.status).toBe('NEW');
+    // 시세는 계속 받는다(연결·구독 유지) — 핑으로 순서를 맞춘 뒤 알림이 없었는지 본다
+    me.send({ op: 'ping', ts: 1 });
+    await me.waitFor(isType('pong'));
+    expect(me.messages.some((m) => m.t === 'order' && m.key === order.key)).toBe(false);
+    me.ws.close();
+  });
+
   it('잘못된 토큰으로 WS 인증하면 UNAUTHORIZED', async () => {
     const server = await start();
     const client = await connect(server);

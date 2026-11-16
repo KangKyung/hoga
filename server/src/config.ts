@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 const schema = z.object({
+  /** production이면 공개된 개발용 비밀값을 거부하고, 계좌 개설 인증 코드(devCode)를 응답에 싣지 않는다 */
+  NODE_ENV: z.string().optional(),
   HOST: z.string().default('0.0.0.0'),
   PORT: z.coerce.number().int().min(0).max(65535).default(8080),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -54,16 +56,16 @@ const schema = z.object({
     .optional(),
 
   // ---- 여러 프로세스(M7) ----
-  /**
-   * all: 한 프로세스에 전부(개발 기본) · market: 시세 단일 작성자 + REST(주문·인증·관리)
-   * gateway: WebSocket 팬아웃만(여러 대). market·gateway는 REDIS_URL이 필요하다
-   */
   /** manual: 관리 콘솔로 장 구간을 바꾼다(기본 장중) · krx: 서울 시각 정규장 일정 */
   SESSION_CLOCK: z.enum(['manual', 'krx']).default('manual'),
   /** VI 단일가 시간(KRX 2분) */
   VI_DURATION_MS: z.coerce.number().int().min(1_000).default(120_000),
   VI_STATIC_BPS: z.coerce.number().int().min(1).default(1_000),
   VI_DYNAMIC_BPS: z.coerce.number().int().min(1).default(300),
+  /**
+   * all: 한 프로세스에 전부(개발 기본) · market: 시세 단일 작성자 + REST(주문·인증·관리)
+   * gateway: WebSocket 팬아웃만(여러 대). market·gateway는 REDIS_URL이 필요하다
+   */
   ROLE: z.enum(['all', 'market', 'gateway']).default('all'),
   /** 있으면 버스·멱등 키·리프레시 토큰을 Redis에 둔다(ROLE=all에서도) */
   REDIS_URL: z.string().optional(),
@@ -75,8 +77,17 @@ const schema = z.object({
 
 export type Config = z.infer<typeof schema>;
 
+/** 저장소에 공개된 개발용 기본값. 운영(NODE_ENV=production)에서는 쓰지 못하게 한다 */
+const DEV_SECRETS = ['JWT_SECRET', 'OTP_ENC_KEY', 'ADMIN_TOKEN'] as const;
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   const config = schema.parse(env);
+  if (config.NODE_ENV === 'production') {
+    const defaults = schema.parse({});
+    const unset = DEV_SECRETS.filter((key) => config[key] === defaults[key]);
+    // 공개 저장소의 기본값이면 누구나 JWT를 위조하고 관리 API를 쓸 수 있다
+    if (unset.length > 0) throw new Error(`NODE_ENV=production requires ${unset.join(', ')} (dev defaults are public)`);
+  }
   if (config.ROLE !== 'all' && !config.REDIS_URL) throw new Error(`ROLE=${config.ROLE} requires REDIS_URL`);
   return config;
 }

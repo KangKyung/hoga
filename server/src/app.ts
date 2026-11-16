@@ -104,7 +104,8 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     config.ROLE === 'all'
       ? new Gateway(app.server, bus, { has: (s) => market.has(s), snapshot: (s) => market.snapshot(s), status: (s) => session.status(s) }, metrics, config, log, (token) => {
           try {
-            return auth.verify(token).sub;
+            const claims = auth.verify(token);
+            return { userId: claims.sub, expiresAt: claims.exp * 1000 };
           } catch {
             return undefined;
           }
@@ -136,6 +137,8 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
       if (!SYMBOL_PATTERN.test(symbol) || !market.has(symbol)) {
         return reply.code(404).send({ error: 'UNKNOWN_SYMBOL' });
       }
+      // depth=all: 전체 호가(재동기화·gateway 복제본용). 숫자는 화면 표시용으로 1~50
+      if (request.query.depth === 'all') return market.snapshot(symbol);
       const depth = Math.min(50, Math.max(1, Number(request.query.depth ?? 20) || 20));
       return market.snapshot(symbol, depth);
     },
@@ -169,7 +172,7 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     ledger,
     responseDelayMs: () => faults.orderDelayMs,
   });
-  registerAccountOpenRoutes(app, new AccountOpenService(users, ledger));
+  registerAccountOpenRoutes(app, new AccountOpenService(users, ledger, Date.now, { exposeDevCode: config.NODE_ENV !== 'production' }));
   registerWebRoutes(app, { market, config });
   registerAdminRoutes(app, {
     token: config.ADMIN_TOKEN,
@@ -249,7 +252,8 @@ export function createGatewayServer(config: Config): GatewayServer {
   const auth = new AuthService(new UserStore(), authConfig(config));
   const gateway = new Gateway(app.server, bus, replica, metrics, config, log, (token) => {
     try {
-      return auth.verify(token).sub;
+      const claims = auth.verify(token);
+      return { userId: claims.sub, expiresAt: claims.exp * 1000 };
     } catch {
       return undefined;
     }

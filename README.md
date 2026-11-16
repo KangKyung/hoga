@@ -5,6 +5,14 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 
 > 모의 데이터만 사용합니다. 실제 증권사·거래소의 이름, 상표, 화면 디자인, 시세 데이터는 쓰지 않습니다.
 
+**한눈에**
+- **무엇을**: 호가·주문·체결·계좌·장 운영(동시호가·VI)·계좌 개설까지 증권 MTS의 핵심 흐름을 C++ 공용 코어 + RN 앱 + 모의 거래소로 구현
+- **어떻게 검증했나**: 로컬 Jenkins 한 파이프라인에서 C++(일반·ASan·TSan)·서버·앱·N-API·CLI 단위 시험과 Appium E2E(iOS·Android 같은 시험 한 벌)
+- **대표 숫자**: 초당 5,400건 시세에서 JS 경유 FPS 60→34 vs C++ 직접 60 유지 · gateway 1대 강제 종료 시 복구 p99 0.76초 · 이진 시세로 대역폭 −71% · 주문 1만여 건 재전송 중복 0건
+- 저장소: https://github.com/KangKyung/hoga
+
+목차: [진행 상황](#진행-상황) · [구조](#구조) · [서버](#서버-모의-거래소) · [실행](#실행-전체) · [설계 메모](#설계-메모) · [알려진 한계](#알려진-한계--다음-단계)
+
 ## 진행 상황
 
 | 단계 | 내용 | 상태 |
@@ -17,7 +25,7 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | M5 | 웹 화면(HTML/JS·AngularJS) + 웹뷰 브리지 · AngularJS 관리 콘솔 · 분석 이벤트 분류표 · ko/en/id/th 현지화 | 완료 |
 | M6 | Jenkins 병렬 파이프라인 · Appium 두 플랫폼 E2E · k6 부하·장애 · "JS 경유 vs C++ 직접" 비교 실험 | 완료 |
 | M7 | Redis로 gateway 여러 대 · 이진 시세 프로토콜 · 주문 OTP · 자체 릴리스 도구 hoga-cli | 완료 |
-| **M8** | 계좌(잔고·미체결·정정·주문가능) · 장 운영 구간·동시호가·VI · 120종목 화면 구독 · 강제 업데이트·점검 · 비대면 계좌 개설 | **완료** |
+| **M8** | 계좌(잔고·미체결·정정·주문가능) · 장 운영 구간·동시호가·VI · 120종목 · 보이는 종목만 구독 · 강제 업데이트·점검 · 비대면 계좌 개설 | **완료** |
 
 ### M8 요약 — 증권 업무 흐름
 
@@ -46,14 +54,30 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 
 ### M8에서 찾은 것들
 
-- **종목을 120개로 늘리자 CI에서 서버 시험이 줄줄이 시간 초과**(#6). 시험 서버도 기본 120종목으로 떠서, 시작할 때 과거 봉을 24배 만들고 "느린 클라이언트" 시험의 `warmUp(1000)`이 120종목을 돌았다. 빌드와 겹친 CI에서 20초를 넘기고 정리까지 밀려 뒤 시험이 연달아 실패 → 서버 시험은 핵심 5종목으로 띄우고(`test/fixtures.ts`), 120종목 목록 자체는 따로 시험.
+- **종목을 120개로 늘리자 CI에서 서버 시험이 줄줄이 시간 초과**(Jenkins #6). 시험 서버도 기본 120종목으로 떠서, 시작할 때 과거 봉을 24배 만들고 "느린 클라이언트" 시험의 `warmUp(1000)`이 120종목을 돌았다. 빌드와 겹친 CI에서 20초를 넘기고 정리까지 밀려 뒤 시험이 연달아 실패 → 서버 시험은 핵심 5종목으로 띄우고(`test/fixtures.ts`), 120종목 목록 자체는 따로 시험. 기존 시험 하나는 아예 "5종목"을 가정하고 있어 시장 단위 시험도 핵심 5종목으로 고정했다.
 - **늦게 채워지는 요약 카드가 탭을 밀었다.** Android E2E에서 계좌 화면의 "미체결" 탭을 눌렀는데 잔고 탭에 머물렀다: 잔고 요약이 도착하며 카드가 커지고 탭이 아래로 밀려, 그 사이의 탭이 엉뚱한 곳에 맞았다. 사람에게도 생기는 오동작이라 카드가 불러오는 동안에도 같은 높이를 차지하게 고쳤다.
-
 - **웹에서 내용 없는 POST가 400.** 계좌 개설 첫 요청이 `content-type: application/json`에 본문 없이 나가 Fastify가 거절했다(서버 시험은 `{}`를 보내 통과). 웹은 POST마다 `{}`라도 보내게 고쳤다.
 - **웹뷰가 옛 JS를 계속 썼다.** HTML은 `no-cache`지만 JS·CSS는 60초 캐시라, 고친 뒤에도 같은 오류가 났다(WKWebView 메모리 캐시는 앱을 다시 띄워야 비워짐). 계좌 개설 화면은 자원 주소에 버전(`?v=2`)을 붙였다. 웹을 자주 바꾸는 MTS라면 빌드 때 해시를 붙이는 게 맞다.
 - **VI 남은 시간이 처음 한 번 "0초"로 깜빡였다.** 시각을 상태로 들고 있다가 값이 바뀐 첫 렌더에 옛 값(0)을 그렸다 → 매 렌더 지금 시각으로 계산하고 1초마다 다시 그리기만.
 - **단일가 체결은 양쪽 모두 걸려 있던 주문이다.** 접속매매 체결 알림은 maker(걸려 있던 쪽)만 보면 됐지만, 단일가 체결은 매수·매도 모두 사용자 주문일 수 있어 둘 다 확인하게 바꿨다(서버 시험이 계좌 반영 누락을 잡음).
-- **종목을 120개로 늘리자 기존 시험 하나가 "5종목"을 가정**하고 있었다 → 시장 단위 시험은 핵심 5종목으로 고정.
+
+### 제출 전 코드 리뷰 반영 (2026-11-17)
+
+별도 Claude Code 세션에 전체 코드 리뷰를 맡겨 나온 결함 중 높음·중간을 고치고, 각각 재현 시험을 붙였습니다.
+
+| 결함 | 원인 | 고친 방법 |
+|---|---|---|
+| **점검 차단 우회** — `/%6Frders`로 점검 중에도 주문 접수 | 원문 URL 앞부분을 비교했는데 라우터는 퍼센트 인코딩을 풀어 `/orders`로 처리 | 라우터가 찾은 **라우트 패턴**(`routeOptions.url`)을 경로 조각 단위로 비교. 계좌 개설도 명시적으로 차단 |
+| **로그아웃해도 WS 인증 유지** — 이전 사용자의 체결 알림이 계속 옴 | 빈 토큰이면 C++ 클라이언트가 아무것도 보내지 않았고, 서버에 인증을 푸는 명령이 없음 | `unauth` 명령 추가(연결·구독은 유지), 서버는 토큰 만료 시각이 지나면 알림을 끊음, C++는 로그아웃 뒤 늦게 온 알림을 JS로 넘기지 않음 |
+| **호가 영구 누락** — 상위 호가가 빠지면 아래 호가가 화면에 안 올라옴 | 스냅샷은 20단계, 변경분은 전체 깊이. seq는 이어져 재동기화도 안 일어남 | WS·재동기화·gateway 복제 스냅샷을 **전체 호가**로(`depth=all`) |
+| 재연결 뒤 늦게 온 HTTP 스냅샷이 호가를 멈춤(가능성) | 스냅샷 응답에 연결 세대 검사가 없음 | 요청 때 세대를 기억하고 다르면 버림 |
+| 공개된 기본 비밀값으로 운영 기동 가능 | `JWT_SECRET`·`ADMIN_TOKEN` 기본값이 저장소에 있음 | `NODE_ENV=production`이면 기본값으로 시작하지 않음 |
+| 로그인 해시가 이벤트 루프를 막음 · 실패 제한 우회 | `scryptSync`, 사용자 이름별 제한만 | 비동기 scrypt(스레드 풀), **IP별 제한** 추가, 실패 기록 정리 |
+| 계좌 개설 신청서 무제한 생성 · 인증 코드 항상 노출 | 생성 제한 없음, `devCode`를 환경 구분 없이 응답 | IP당 10분 10건·전체 1만 건 상한, `devCode`는 개발 설정에서만 |
+| Android 교착 가능성 | 잘못된 URL이면 C++가 락을 쥔 채 부른 함수 안에서 C++ 콜백 | 결과를 타이머 스레드로 넘겨 나중에 전달(iOS와 같은 방식) |
+| Android 신분증 원본 사진 잔존 | 카메라 앱 사이에 프로세스가 죽으면 임시 파일이 남음 | 모듈 시작 시 임시 폴더 정리, 예외 시 `E_BUSY` 고착 방지 |
+
+검증: C++ 94개(+2), 서버 vitest 90개(+5), Jenkins **#9 성공 4분 41초, JUnit 458개 통과 · 실패 0** (C++ 94×3 · 서버 90 · 앱 55 · N-API 10 · hoga-cli 7 · E2E 7×2). 낮음 등급(미확정 주문 목록의 사용자 구분, `/metrics` 공개, Redis 멱등 완료의 원자성 등)은 다음 단계로 남겼습니다.
 
 ### M7 요약
 
@@ -147,7 +171,6 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 - **개선**: 서버가 1012로 끊을 때 close reason에 **재접속 창**(`retry-window=<ms>` = 끊는 연결 수 ÷ 초당 받아들일 수)을 싣고, C++ `MarketClient`는 첫 재접속을 그 창 안에서 무작위로 고릅니다(이후 백오프도 창보다 좁히지 않음, 상한 30초, 1012일 때만). k6 클라이언트도 같은 규칙입니다.
 - **감수한 것**: 중앙값은 0.5초 → 8초로 늘었습니다. 대신 "대부분 빨리 + 일부는 30초"가 "모두 창 안에서 고르게"로 바뀌어 실패가 1,436 → 47번으로 줄었습니다. 초당 300은 이 맥에서 잰 값이라 `WS_RECONNECT_ACCEPT_PER_SEC`로 바꿀 수 있고, 실제로는 gateway를 늘려 창을 줄입니다.
 
-
 ### M5 검증 결과 (2026-11-15)
 
 | 대상 | 내용 | 결과 |
@@ -223,26 +246,6 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | Android | 로그인 → 강제 종료 → 재실행 시 Keystore 토큰으로 세션 복원(`/auth/refresh` 200) | 서버 요청 로그 |
 | Android `FLAG_SECURE` | 화면 캡처가 검게 나옴(민감 화면 보호 동작) | [캡처](docs/m3-android-flag-secure.png) |
 
-### M2 검증 결과 (2026-11-15)
-
-| 대상 | 내용 | 결과 |
-|---|---|---|
-| C++ `MarketClient` | 가짜 전송 계층으로 재연결·지터·재동기화·늦은 콜백 무시 등 10개 (코어 전체 47개) | 일반 · ASan+UBSan · TSan 통과 |
-| JS | Jest(목 TurboModule로 연결·구독·호가 화면) · `tsc` · ESLint | 통과 |
-| iOS 26.4 시뮬레이터 | 관심종목 · 실시간 호가 · 체결 | [목록](docs/m2-ios-watchlist.png) · [호가](docs/m2-ios-quote.png) |
-| Android 17 에뮬레이터 | 같은 화면, 같은 C++ 코드 | [목록](docs/m2-android-watchlist.png) · [호가](docs/m2-android-quote.png) |
-| 서버 종료(1012) | 두 앱 모두 "재연결 중"으로 바뀌고 끊긴 동안의 호가를 비움 → 서버 재시작 후 자동 복구 | [캡처](docs/m2-ios-reconnecting.png) |
-| 변경분 5% 고의 누락 (`FAULT_DROP_SEQ_RATE=0.05`) | iOS 누락 감지 33 → 재동기화 33, Android 100 → 100. 화면은 계속 "실시간" | [iOS](docs/m2-ios-resync-stats.png) · [Android](docs/m2-android-resync-stats.png) |
-
-### M1 검증 결과 (2026-11-15)
-
-| 대상 | 내용 | 결과 |
-|---|---|---|
-| C++ 코어 | GoogleTest 37개 | 일반 · ASan+UBSan · TSan 빌드 모두 통과, `-Wconversion -Wshadow` 경고 없음 |
-| Node 애드온 | node:test 7개 (매칭 엔진·검증 규칙을 C++에서 그대로 호출) | 통과 |
-| 서버 | vitest 20개 (단위 + 실제 포트를 여는 통합 테스트) | 3회 연속 통과, `tsc` 통과 |
-| 서버 실제 실행 | 2초 동안 2종목 구독 → 변경분 43개, seq 누락 0, SIGTERM 정상 종료 | 확인 |
-
 ### M3 주문 · 보안 설계
 
 **주문 — "늦은 응답 = 실패"가 아니다**
@@ -275,13 +278,24 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | 리프레시 토큰 | 7일, 서버엔 해시만 저장, 쓸 때마다 회전. 이미 쓴 토큰이 다시 오면 탈취로 보고 계열 전체 폐기 |
 | 저장 순서 | 회전된 새 토큰을 **먼저 저장한 뒤** 사용(저장 전에 죽으면 다음 실행에서 재사용으로 간주되어 세션이 끊기므로) |
 | 로그인 보호 | scrypt 해시, 사용자당 분당 실패 5회 → 429, 없는 사용자도 같은 해시 비용 |
-| iOS 저장소 | **Objective-C** Keychain: `AfterFirstUnlockThisDeviceOnly`, 갱신 우선(update → add). 생체 값은 `SecAccessControl(.biometryCurrentSet)` |
+| iOS 저장소 | **Objective-C(++)** Keychain: `AfterFirstUnlockThisDeviceOnly`, 갱신 우선(update → add). 생체 값은 `SecAccessControl(.biometryCurrentSet)` |
 | Android 저장소 | **Kotlin** Keystore AES-256-GCM. 생체 값은 사용할 때마다 인증이 필요한 키 + `BiometricPrompt` `CryptoObject`(콜백 우회 불가), 지문 추가 시 무효화 |
 | 생체 잠금 | 앱을 열 때 생체 보호 값을 읽어야 세션 복원. 토큰 회전마다 생체 인증을 요구하지 않도록 토큰이 아닌 "잠금 값"을 생체로 보호 |
-| 기기 보안 신호 | iOS **Objective-C**(탈옥 경로·샌드박스 쓰기·후킹 dylib·`P_TRACED`·캡처 상태), Android **Java**(su·test-keys·에뮬레이터·디버거). 참고 신호로만 쓰고 최종 판단은 서버 |
+| 기기 보안 신호 | iOS **Objective-C(++)**(탈옥 경로·샌드박스 쓰기·후킹 dylib·`P_TRACED`·캡처 상태), Android **Java**(su·test-keys·에뮬레이터·디버거). 참고 신호로만 쓰고 최종 판단은 서버 |
 | 화면 보호 | Android `FLAG_SECURE`(캡처·녹화·최근 앱 미리보기 차단), iOS는 캡처를 막을 수 없어 앱 전환기 미리보기를 블러로 가림 |
 
 개발용 계정(서버 시드, 실제 계정 아님): `demo / hoga-demo-1234`, `trader2 / hoga-trader-5678`
+
+### M2 검증 결과 (2026-11-15)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| C++ `MarketClient` | 가짜 전송 계층으로 재연결·지터·재동기화·늦은 콜백 무시 등 10개 (코어 전체 47개) | 일반 · ASan+UBSan · TSan 통과 |
+| JS | Jest(목 TurboModule로 연결·구독·호가 화면) · `tsc` · ESLint | 통과 |
+| iOS 26.4 시뮬레이터 | 관심종목 · 실시간 호가 · 체결 | [목록](docs/m2-ios-watchlist.png) · [호가](docs/m2-ios-quote.png) |
+| Android 17 에뮬레이터 | 같은 화면, 같은 C++ 코드 | [목록](docs/m2-android-watchlist.png) · [호가](docs/m2-android-quote.png) |
+| 서버 종료(1012) | 두 앱 모두 "재연결 중"으로 바뀌고 끊긴 동안의 호가를 비움 → 서버 재시작 후 자동 복구 | [캡처](docs/m2-ios-reconnecting.png) |
+| 변경분 5% 고의 누락 (`FAULT_DROP_SEQ_RATE=0.05`) | iOS 누락 감지 33 → 재동기화 33, Android 100 → 100. 화면은 계속 "실시간" | [iOS](docs/m2-ios-resync-stats.png) · [Android](docs/m2-android-resync-stats.png) |
 
 ### M2 데이터 흐름 — 고빈도 시세는 JS를 지나가지 않는다
 
@@ -304,6 +318,15 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
   - JNI: 클래스·메서드 ID는 `JNI_OnLoad`에서 찾아 전역 참조로 보관합니다(네이티브 스레드에서 `FindClass`를 하면 앱 클래스 로더를 못 찾음). Kotlin 객체는 `NewGlobalRef`로 잡고 소멸 시 `release()` 후 해제합니다.
   - 교착 방지: C++는 자기 뮤텍스를 잡은 채 Java를 부르지 않고, Kotlin은 콜백 전달 잠금과 소켓 조작을 분리합니다.
   - TurboModule 이벤트는 JS 스레드로 넘긴 뒤 모듈이 살아 있을 때만 내보냅니다.
+
+### M1 검증 결과 (2026-11-15)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| C++ 코어 | GoogleTest 37개 | 일반 · ASan+UBSan · TSan 빌드 모두 통과, `-Wconversion -Wshadow` 경고 없음 |
+| Node 애드온 | node:test 7개 (매칭 엔진·검증 규칙을 C++에서 그대로 호출) | 통과 |
+| 서버 | vitest 20개 (단위 + 실제 포트를 여는 통합 테스트) | 3회 연속 통과, `tsc` 통과 |
+| 서버 실제 실행 | 2초 동안 2종목 구독 → 변경분 43개, seq 누락 0, SIGTERM 정상 종료 | 확인 |
 
 ### M0 검증 결과
 
@@ -344,10 +367,13 @@ hoga/
 ├─ server/                        # Node.js 모의 거래소 (TypeScript, Fastify, ws)
 │  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기 · session.ts(장 구간·VI)
 │  ├─ src/account/ledger.ts       # 모의 계좌 원장(예수금·보유·미체결 묶음)
-│  ├─ src/api/appConfig.ts        # 강제 업데이트·점검(503)
-│  ├─ src/api/accountOpen.ts      # 비대면 계좌 개설(단계 강제·가린 값)
+│  ├─ src/api/                    # REST
+│  │  ├─ auth.ts, orders.ts       #   인증 · 주문(멱등 키) · 계좌 · 정정
+│  │  ├─ appConfig.ts             #   강제 업데이트 · 점검(503)
+│  │  ├─ accountOpen.ts           #   비대면 계좌 개설(단계 강제 · 가린 값)
+│  │  ├─ web.ts                   #   웹 화면 정적 제공 · CSP · 번역 · 종목정보 · 공지
+│  │  └─ admin.ts                 #   관리 API(장 구간 · VI · 장애 주입 · 연결 끊기)
 │  ├─ src/gateway/                # WebSocket 팬아웃 (백프레셔·하트비트·제한)
-│  ├─ src/api/                    # REST: 인증 · 주문 (멱등 키)
 │  ├─ src/auth/                   # HS256 JWT · 사용자 · 리프레시 회전
 │  ├─ src/orders/tracker.ts       # 사용자 주문 상태 · 체결 알림
 │  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 / src/redis/bus.ts)
@@ -356,8 +382,6 @@ hoga/
 │  ├─ src/cluster.ts              # gateway 통계 보고 · 관리 명령 전파
 │  ├─ src/wire.ts                 # 이진 시세 인코더(C++ 디코더와 골든 벡터로 맞춤)
 │  ├─ src/auth/totp.ts, otp.ts    # RFC 6238 TOTP · 주문 step-up
-│  ├─ src/api/web.ts              # 웹 화면 정적 제공 · CSP · 번역 · 종목정보 · 공지
-│  ├─ src/api/admin.ts            # 관리 API(장애 주입 · 변동성 · 연결 끊기)
 │  ├─ web/                        # 종목정보(HTML/CSS/JS) · 공지(AngularJS) · 계좌 개설(HTML/JS) · 공용 브리지·번역·분석 JS
 │  ├─ admin/                      # AngularJS 관리 콘솔
 │  └─ test/
@@ -416,29 +440,41 @@ npm test
 |---|---|
 | `GET /healthz`, `/readyz`, `/metrics` | 상태 · Prometheus 지표 |
 | `GET /symbols` | 모의 종목 목록 (기준가, 호가단위, 상·하한가) |
-| `GET /book/:symbol?depth=20` | 스냅샷 (재동기화용) |
+| `GET /book/:symbol?depth=20` | 스냅샷. `depth=all`은 전체 호가(재동기화·gateway 복제용 — 변경분이 전체 깊이로 오므로) |
 | `GET /candles/:symbol?interval=1m&limit=600` | 과거 봉 `[[start, o, h, l, c, v]]` (1m · 5m · 15m) |
 | `GET /symbols/:symbol/info?lang=` | 종목정보 화면용 요약(상·하한가, 오늘 시고저·거래량, 시가총액, 언어별 개요) |
 | `GET /notices?lang=&category=`, `/notices/:id` | 공지(고정 먼저, 언어 없으면 ko) |
 | `GET /i18n/:lang` | 번역(앱·웹 공용). `ETag`/`If-None-Match` |
 | `/web/stock/?symbol=&lang=`, `/web/notices/` | 웹 화면 (CSP, HTML no-cache) |
-| `/admin/` · `/admin/api/*` | 관리 콘솔 · API(`x-admin-token`, 기본값 `ADMIN_TOKEN`) |
+| `GET /market/status` | 전 종목 매매 상태(장 구간 · 매매 방식 · VI · 예상 체결가) |
+| `GET /app/config?platform=&version=&lang=` | 강제 업데이트 · 최신 버전 안내 · 점검 여부(점검 중 주문 · 계좌 · 로그인 · 계좌 개설 API는 503 `MAINTENANCE`) |
+| `/admin/` · `/admin/api/*` | 관리 콘솔 · API(헤더 `x-admin-token` = 환경 변수 `ADMIN_TOKEN`, 개발 기본값 `hoga-admin-dev-token`). 장 구간 · VI · 앱 설정 · 장애 주입 · 변동성 · 연결 끊기 · OTP 초기화 |
 | `POST /auth/login`, `/auth/refresh`, `/auth/logout` | 로그인 · 토큰 회전 · 로그아웃 |
+| `/auth/otp/*` | 주문 OTP 등록 · 확인(step-up 토큰) |
 | `GET /orders?symbol=` | 내 주문 목록 (Bearer 토큰 필요, 아래 주문 API 모두 동일) |
-| `POST /orders` | 주문. `Idempotency-Key` 헤더 필수(사용자별로 분리) |
+| `POST /orders` | 주문. `Idempotency-Key` 헤더 필수(사용자별로 분리). 정정은 새 키 + `amendOf`(원주문 키) |
 | `GET /orders/:key` | 주문 결과 조회 (타임아웃 후 확정용) |
 | `POST /orders/:key/cancel` | 대기 주문 취소 |
+| `GET /account`, `/account/orderable` | 잔고 · 보유 · 미체결 묶음 · 주문가능 금액/수량 |
+| `POST /account-open`, `/account-open/:id/{terms,profile,phone/send,phone/verify,id-card,complete}` | 비대면 계좌 개설(헤더 `x-application-token`, 단계 순서 강제, IP당 10분 10건) |
 
 ### 시세 프로토콜
 
 ```jsonc
 // 클라이언트 → 서버
-{ "op": "sub", "symbols": ["000001"] }
+{ "op": "sub", "symbols": ["000001"] }      // "unsub"도 같은 모양
+{ "op": "auth", "token": "<액세스 토큰>" }   // 내 주문 알림 받기 → { "t": "authed" }
+{ "op": "unauth" }                          // 로그아웃: 연결·구독은 그대로, 알림만 끊음 → { "t": "unauthed" }
 // 서버 → 클라이언트
 { "t": "snap",  "sym": "000001", "seq": 1042, "bids": [[71200, 1520]], "asks": [[71300, 880]], "ts": 0 }
 { "t": "delta", "sym": "000001", "seq": 1043, "side": "B", "px": 71200, "qty": 1490, "ts": 0 }  // qty 0 = 삭제
 { "t": "trade", "sym": "000001", "px": 71300, "qty": 12, "aggr": "B", "ts": 0 }                  // 정보용, seq 없음
+{ "t": "status", "sym": "000001", "phase": "OPEN", "mode": "AUCTION", "vi": { "kind": "DYNAMIC", "until": 0, "ref": 71200 }, "exp": { "px": 71000, "qty": 2190 }, "ts": 0 }
+{ "t": "order", "key": "…", "status": "PARTIALLY_FILLED", "filled": 4, "resting": 6, … }        // 인증한 사용자에게만
 ```
+
+- `/ws?proto=bin`이면 시세(`snap`·`delta`·`trade`)를 같은 내용의 이진 형식 v1(LEB128, `shared/protocol/wire-v1.json`)으로 보냅니다. 앱 기본값입니다. 주문 알림·오류·`status`는 JSON 그대로입니다.
+- 구독 직후 스냅샷은 **전체 호가**입니다. 변경분이 깊이와 상관없이 모든 가격에 대해 오므로, 일부만 준 스냅샷 위에 쌓으면 위쪽 호가가 빠질 때 아래 호가가 영영 비게 됩니다.
 
 - 종목별 seq는 변경분마다 1씩 증가합니다. 클라이언트는 `seq == last + 1`일 때만 반영하고, 건너뛰면 `GET /book/:symbol`로 다시 맞춥니다(`hoga::BookSync`).
 - 변경분의 `qty`는 증감량이 아니라 **그 가격대의 새 잔량**이라, 같은 메시지를 두 번 받아도 결과가 같습니다.
@@ -460,32 +496,37 @@ npm test
 |---|---|
 | 느린 클라이언트가 서버 메모리를 잡아먹음 | 송신 버퍼가 SOFT(512KB)를 넘으면 그 종목 변경분을 건너뛰고, 버퍼가 비면 **최신 스냅샷 1개**로 따라잡게 함. HARD(1MB) 초과 시 1013으로 종료 |
 | 죽은 연결이 쌓임 | 15초 하트비트 ping, 다음 주기까지 pong 없으면 terminate |
-| 남용 | 메시지 4KB 제한, 연결당 초당 20개(토큰 버킷), 연결당 구독 20종목 |
+| 남용 | 메시지 4KB 제한, 연결당 초당 20개(토큰 버킷), 연결당 구독 40종목(앱은 36에서 스스로 정리) |
 | gateway 장애 | gateway는 상태가 없다(호가는 market에서 복제, 토큰은 같은 키로 직접 검증) → 아무 gateway나 죽어도 그 연결만 다른 gateway로 재접속(M7: 1/3 강제 종료 시 복구 p99 0.76초) |
 | 재시작 때 일제히 재접속 | 종료 시 1012(서비스 재시작) + 재접속 창(`retry-window`, 연결 수 ÷ 초당 300) 전송 → 클라이언트는 창 안에서 흩어져 재접속(M6에서 k6로 측정해 추가) |
 | 구독자마다 직렬화 | market이 한 번 직렬화한 문자열을 그대로 전송 |
 
 ## 실행 (전체)
 
-필요 도구: Xcode 26+, CocoaPods, Node 22+, JDK 17, Android SDK + NDK 27, CMake 3.22+
+필요 도구: Xcode 26+, CocoaPods, Node 22.11+, JDK 17, Android SDK + NDK 27, CMake 3.22+
 (CMake가 PATH에 없으면 Android SDK에 포함된 것을 쓸 수 있습니다: `export PATH="$HOME/Library/Android/sdk/cmake/3.22.1/bin:$PATH"`)
+
+모두 **저장소 루트에서** 실행합니다(각 줄은 괄호 안에서 폴더를 옮겨 다음 줄에 영향을 주지 않습니다).
 
 ```bash
 # 1) C++ 코어 테스트 (Sanitizer: -DHOGA_SANITIZE=address | thread | undefined)
 cmake -S core -B core/build -G Ninja && cmake --build core/build && ctest --test-dir core/build
 
 # 2) Node 애드온
-cd bindings/node && npm install && npx cmake-js compile -G Ninja && npm test
+(cd bindings/node && npm install && npx cmake-js compile -G Ninja && npm test)
 
-# 3) 서버 (관리 콘솔: http://localhost:8080/admin/ , 토큰은 ADMIN_TOKEN 환경 변수)
-cd server && npm install && npm test && npm start
+# 3) 서버 시험 후 실행 — 계속 떠 있으므로 별도 터미널에서
+#    (관리 콘솔: http://localhost:8080/admin/ , 토큰은 ADMIN_TOKEN 환경 변수 · 개발 기본값 hoga-admin-dev-token)
+(cd server && npm install && npm test) && npm start --prefix server
 
 # 4) 앱 (서버가 8080에서 떠 있어야 시세가 보인다)
-cd apps/mobile && npm install
+(cd apps/mobile && npm install)
 adb reverse tcp:8080 tcp:8080   # Android 에뮬레이터 → Mac의 서버
-(cd ios && pod install) && npx react-native run-ios
-npx react-native run-android --active-arch-only
+(cd apps/mobile/ios && pod install) && (cd apps/mobile && npx react-native run-ios)
+(cd apps/mobile && npx react-native run-android --active-arch-only)
 ```
+
+- `NODE_ENV=production`이면 서버는 `JWT_SECRET`·`OTP_ENC_KEY`·`ADMIN_TOKEN`을 직접 넣지 않으면 시작하지 않고(공개 저장소의 개발 기본값이라), 계좌 개설 인증 코드를 응답에 싣지 않습니다.
 
 ### 자동화 (M6)
 
@@ -530,7 +571,8 @@ deploy/cluster.sh down
 
 # 부하: gateway에 직접 나눠 붙기(맥 한 대에서 nginx를 거치면 임시 포트가 먼저 바닥난다)
 k6 run -e BASE=http://localhost:8080 -e WS_URLS=$(deploy/cluster.sh ws-urls) -e VUS=3000 loadtest/ws-fanout.js
-k6 run -e BASE=http://localhost:8090 -e PROTO=bin -e VUS=3000 loadtest/ws-fanout.js   # 이진 형식
+# 이진 형식 비교: 클러스터가 아닌 단일 프로세스 서버(ci/load.sh와 같은 8090)를 띄워 같은 조건으로
+k6 run -e BASE=http://localhost:8090 -e PROTO=bin -e VUS=3000 loadtest/ws-fanout.js
 
 # 릴리스 도구
 tools/hoga-cli/bin/hoga.js status
@@ -566,7 +608,7 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 ## 설계 메모
 
 - **가격·수량은 정수(원·주)**. JS `number`가 정확히 표현하는 범위(2^53−1)를 넘거나 소수면 Node·앱 바인딩 모두 오류를 던집니다.
-- **규칙은 한 곳에만**: 호가단위, 가격제한폭, 주문 검증은 C++ 한 벌을 앱(TurboModule)과 서버(N-API)가 함께 씁니다.
+- **규칙은 한 곳에만**: 호가단위, 가격제한폭, 주문 검증, 주문가능 수량(`checkAccount`·`maxOrderQty`), VI 판정, 단일가 체결은 C++ 한 벌을 앱(TurboModule)과 서버(N-API)가 함께 씁니다.
 - **시세 단일 작성자**: 한 종목의 seq를 여러 곳에서 발급하면 순서가 꼬이므로 market만 발급합니다. 부하의 대부분인 팬아웃은 상태 없는 gateway를 늘려 감당합니다.
 - **매칭 엔진은 결정적**: 같은 입력이면 같은 출력. 한 스레드(Node 이벤트 루프)에서만 호출합니다.
 - **`OrderBook`은 쓰기 1 · 읽기 다수**: 소켓 스레드가 쓰고 JS·UI 스레드가 읽는 M2 구조를 위해 `shared_mutex`로 보호하고, TSan으로 확인합니다.
@@ -578,13 +620,12 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 호가가격단위 · 가격제한폭은 **간소화한 규칙**입니다. KRX 규정 원문과 대조하고 출처를 남겨야 합니다.
 - market은 한 대(시세 단일 작성자)이고 매칭 엔진·주문 기록(`OrderTracker`)은 메모리라, market을 재시작하면 호가·체결 기록은 사라집니다(멱등 키·로그인·OTP는 Redis에 남음). market 이중화(리더 선출·이벤트 로그)는 하지 않았습니다.
 - Redis는 한 대이고 영속화를 끈 개발용입니다. Redis가 죽으면 gateway는 재연결을 기다리고(시세 멈춤), 복제 장부를 다시 받습니다. Sentinel·Cluster는 다루지 않았습니다.
-- 로그인 실패 횟수 제한은 아직 프로세스 메모리라 market이 여러 대면 대수만큼 느슨해집니다.
+- 로그인 실패 횟수 제한(사용자 이름별 · IP별)은 아직 프로세스 메모리라 market이 여러 대면 대수만큼 느슨해집니다.
 - 이진 형식은 버전 1 하나뿐입니다. 형식을 바꿀 때는 종류 바이트를 새로 쓰거나 `proto=bin2`처럼 협상해야 합니다(앱은 첫 바이트로 JSON·이진을 가려 둘 다 읽음).
 - OTP 등록은 앱 화면에 시드를 한 번 보여 주는 방식이고, 분실 시 초기화는 관리 API로만 합니다(본인 확인 절차 없음). 주문 step-up 토큰은 10분, 앱 메모리에만 둡니다.
 - hoga-cli의 Android AAB는 디버그 키로 서명되고, iOS 아카이브는 서명하지 않습니다(개발자 계정 없음). 스토어 업로드·Fastlane 레인은 없습니다.
 - 생체 인증 경로(Face ID·지문)는 시뮬레이터·에뮬레이터에 생체 정보가 등록되지 않아 **기기에서 확인하지 못했습니다**. 생체 없는 경로(일반 Keychain·Keystore 저장, 세션 복원)만 확인했습니다.
 - Android 14+ 화면 캡처 감지(`DETECT_SCREEN_CAPTURE`)는 넣지 않았고 `FLAG_SECURE`로 차단만 합니다.
-- 인증서 고정은 서버가 아직 HTTP라 넣지 않았습니다.
 - Appium(UiAutomator2)은 시세가 계속 바뀌는 화면에서 "화면이 멈출 때까지 기다리기"가 끝나지 않아 `waitForIdleTimeout: 0`으로 끕니다. iOS의 "암호를 저장하겠습니까?" 창은 다른 프로세스가 띄워 요소로 잡히지 않아, 테스트가 화면 비율 위치로 "지금 안 함"을 누릅니다(기기 크기가 많이 다르면 고쳐야 함).
 - Android E2E 실패 화면은 `FLAG_SECURE` 때문에 검게 저장됩니다(요소 조작·읽기는 됨).
 - 비교 실험은 Debug 빌드·시뮬레이터/에뮬레이터 숫자입니다. Release 빌드·실기기, UI 스레드 프레임(iOS)은 재지 않았습니다. Android `gfxinfo` 값은 JSON에 남겼지만 에뮬레이터 주사율 변화로 비교에 쓰지 않았습니다.
@@ -592,7 +633,7 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - Jenkins는 로컬 한 대(에이전트 없음)이고 SCM 폴링·웹훅 없이 `build.sh`로 실행합니다. Sentry·Redmine/SVN·FCM 푸시는 하지 않았습니다.
 - 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용). 재연결 후에도 이전 체결 목록은 그대로 보입니다.
 - 앱의 서버 주소는 `localhost:8080`으로 고정입니다(시뮬레이터·에뮬레이터 개발용).
-- 인증서 고정·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
+- 인증서 고정(서버가 아직 HTTP)·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
 - 차트: 서버의 과거 봉은 시작할 때 만든 모의 데이터이고 서버 메모리에만 있습니다. 앱은 연결할 때 600봉만 받습니다(더 과거로 스크롤해도 추가로 받지 않음).
 - 차트: Android 핀치 확대는 코드로 넣었지만 adb로는 두 손가락 입력을 만들 수 없어 **에뮬레이터에서 확인하지 못했습니다**(iOS에서는 확인). 차트 접근성(VoiceOver·TalkBack 요약)은 아직 없습니다.
 - 차트: 체결이 없는 분에는 봉이 생기지 않습니다(빈 봉 채우기 없음).
@@ -605,6 +646,10 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 계좌 원장은 market 메모리라 재시작하면 처음 값으로 돌아갑니다. 수수료·세금·결제일(T+2)·신용·미수는 계산하지 않습니다.
 - 정정은 지정가만, 취소는 전량만 됩니다. 실제 거래소처럼 정정 주문이 원주문 번호를 잇는 "정정 확인" 체계는 흉내만 냈습니다(새 주문 + `amendOf`).
 - 동시호가·VI는 단순화했습니다: 단일가 중 시장가는 받지 않고, VI는 주문 처리가 끝난 뒤 판정합니다(실제는 처리 도중 멈춤). 장 마감 뒤 시간외 매매, 공휴일, 랜덤 엔드(마감 직전 무작위 연장)는 없습니다.
-- 강제 업데이트의 스토어 주소는 모의 값이고, 점검 중에도 시세(WebSocket)는 막지 않습니다.
-- 비대면 계좌 개설은 모의입니다: 휴대폰 인증 코드는 실제로 보내지 않고 화면에 보여 주며, 신분증은 JPEG 형식만 확인합니다(진위 확인·OCR·얼굴 대조·기존 계좌 1원 인증 없음). 신청서는 30분 동안 메모리에만 있습니다. 시뮬레이터에는 카메라가 없어 **카메라 촬영 경로는 실기기에서 확인해야 합니다**(사진 선택 경로만 확인).
+- 강제 업데이트의 스토어 주소는 모의 값이고, 점검 중에도 시세(WebSocket)는 막지 않습니다. 최소 버전은 앱이 지키는 규칙이라 서버가 요청의 앱 버전을 검사해 주문을 막지는 않습니다(점검은 서버가 막음).
+- 비대면 계좌 개설은 모의입니다: 휴대폰 인증 코드는 실제로 보내지 않고 화면에 보여 주며(개발 설정에서만), 신분증은 JPEG 형식만 확인합니다(진위 확인·OCR·얼굴 대조·기존 계좌 1원 인증 없음). 신청서는 30분 동안 메모리에만 있습니다. 시뮬레이터에는 카메라가 없어 **카메라 촬영 경로는 실기기에서 확인해야 합니다**(사진 선택 경로만 확인).
 - 계획한 M0~M8을 마쳤습니다. 남은 후보: FCM 푸시(Firebase 계정 필요), Sentry, market 이중화, 실기기 측정.
+
+## 라이선스
+
+포트폴리오 열람용으로 공개한 저장소이며 별도의 오픈소스 라이선스를 부여하지 않습니다. 동봉한 nlohmann/json은 MIT 라이선스입니다(`core/third_party/nlohmann/LICENSE.MIT`).

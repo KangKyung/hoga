@@ -125,7 +125,7 @@ TEST(MarketClient, GapRequestsHttpSnapshotOnceAndReplaysBuffer) {
   f.transport->message(delta(12, 71'200, 80));  // 11 누락
   f.transport->message(delta(13, 71'200, 70));
   ASSERT_EQ(f.transport->snapshots().size(), 1u);  // 한 번만 요청
-  EXPECT_EQ(f.transport->snapshots()[0]->url, "http://test/book/000001?depth=50");
+  EXPECT_EQ(f.transport->snapshots()[0]->url, "http://test/book/000001?depth=all");
   EXPECT_EQ(f.client->book("000001", 10).sync, SyncState::Resyncing);
   EXPECT_EQ(f.client->stats().gaps, 1u);
 
@@ -136,6 +136,31 @@ TEST(MarketClient, GapRequestsHttpSnapshotOnceAndReplaysBuffer) {
   EXPECT_EQ(view.seq, 13u);
   EXPECT_EQ(view.bids, (std::vector<Level>{{71'200, 70}}));
   EXPECT_EQ(f.client->stats().resyncs, 1u);
+}
+
+TEST(MarketClient, SnapshotFromBeforeReconnectIsIgnored) {
+  Fixture f;
+  f.client->subscribe({"000001"});
+  f.client->start();
+  f.transport->open();
+  f.transport->message(snap(500, 71'200, 100));
+  f.transport->message(delta(502, 71'200, 80));  // 누락 → HTTP 스냅샷 요청
+  ASSERT_EQ(f.transport->snapshots().size(), 1u);
+
+  // 응답이 오기 전에 서버가 재시작: 새 서버는 seq를 처음부터 센다
+  f.transport->serverClose(1012);
+  f.transport->runTimers();
+  f.transport->open();
+  f.transport->message(snap(3, 71'000, 10));
+  ASSERT_EQ(f.client->book("000001", 10).seq, 3u);
+
+  // 이전 서버의 늦은 응답(큰 seq)을 받아들이면 새 서버의 변경분이 전부 오래된 것으로 버려진다
+  f.transport->snapshots()[0]->done(200, snap(502, 71'200, 80));
+  f.transport->message(delta(4, 71'000, 7));
+  const auto view = f.client->book("000001", 10);
+  EXPECT_EQ(view.sync, SyncState::Live);
+  EXPECT_EQ(view.seq, 4u);
+  EXPECT_EQ(view.bids, (std::vector<Level>{{71'000, 7}}));
 }
 
 TEST(MarketClient, FailedSnapshotIsRetriedLater) {
@@ -321,12 +346,40 @@ TEST(MarketClient, ForwardsOrderEventsToListener) {
   Fixture f;
   std::vector<std::string> events;
   f.client->setUserEventListener([&](const std::string& json) { events.push_back(json); });
+  f.client->setAuthToken("token-abc");
   f.client->start();
   f.transport->open();
   const std::string event = R"({"t":"order","key":"k1","orderId":3,"symbol":"000001","status":"FILLED"})";
   f.transport->message(event);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0], event);
+}
+
+TEST(MarketClient, LogoutSendsUnauthAndDropsLateOrderEvents) {
+  Fixture f;
+  std::vector<std::string> events;
+  f.client->setUserEventListener([&](const std::string& json) { events.push_back(json); });
+  f.client->subscribe({"000001"});
+  f.client->setAuthToken("token-abc");
+  f.client->start();
+  f.transport->open();
+  f.transport->message(R"({"t":"authed","userId":"u-demo"})");
+
+  // 로그아웃: 연결은 그대로, 서버에 unauth만 보낸다(빈 토큰으로 아무것도 안 보내면 서버는 계속 이전 사용자로 안다)
+  f.client->setAuthToken("");
+  EXPECT_EQ(f.transport->sent.back(), R"({"op":"unauth"})");
+  EXPECT_FALSE(f.client->stats().authenticated);
+  EXPECT_EQ(f.client->stats().state, ConnectionState::Open);
+
+  // 서버가 unauth를 처리하기 전에 이미 오던 알림은 JS로 넘기지 않는다
+  f.transport->message(R"({"t":"order","key":"k1","orderId":3,"symbol":"000001","status":"FILLED"})");
+  EXPECT_TRUE(events.empty());
+  f.transport->message(R"({"t":"unauthed"})");
+
+  // 이미 빈 토큰이면 다시 보내지 않는다
+  const auto sent = f.transport->sent.size();
+  f.client->setAuthToken("");
+  EXPECT_EQ(f.transport->sent.size(), sent);
 }
 
 TEST(MarketClient, MarketTapSeesEveryMarketMessageOutsideTheLock) {

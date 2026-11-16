@@ -33,12 +33,14 @@ type GatewayConfig = Pick<
   | 'WS_RECONNECT_ACCEPT_PER_SEC'
 >;
 
-/** 액세스 토큰 → 사용자 ID. 틀리거나 만료면 undefined */
-export type Authenticator = (token: string) => string | undefined;
+/** 액세스 토큰 → 사용자 ID와 만료 시각(epoch ms). 틀리거나 만료면 undefined */
+export type Authenticator = (token: string) => { userId: string; expiresAt: number } | undefined;
 
 interface Client {
   id: string;
   userId?: string;
+  /** 인증에 쓴 액세스 토큰의 만료 시각. 지나면 사용자 알림을 끊는다(앱은 만료 전에 새 토큰으로 다시 auth) */
+  authExpiresAt?: number;
   ws: WebSocket;
   subs: Set<string>;
   /** 송신 버퍼가 밀려 변경분을 건너뛴 종목 → 버퍼가 비면 최신 스냅샷으로 대체 */
@@ -168,13 +170,29 @@ export class Gateway {
     this.clients.delete(client);
     for (const symbol of client.subs) this.bySymbol.get(symbol)?.delete(client);
     client.subs.clear();
-    if (client.userId) this.byUser.get(client.userId)?.delete(client);
+    this.detachUser(client);
   }
 
-  /** 사용자 전용 메시지(주문 알림). 그 사용자로 인증한 연결에만 보낸다 */
+  /** 연결에서 사용자 인증만 떼어 낸다(시세 구독은 그대로) */
+  private detachUser(client: Client): void {
+    if (!client.userId) return;
+    const set = this.byUser.get(client.userId);
+    set?.delete(client);
+    if (set?.size === 0) this.byUser.delete(client.userId);
+    client.userId = undefined;
+    client.authExpiresAt = undefined;
+  }
+
+  /** 사용자 전용 메시지(주문 알림). 그 사용자로 인증한 연결에만, 토큰이 아직 유효할 때만 보낸다 */
   private sendToUser(userId: string, payload: string): void {
-    for (const client of this.byUser.get(userId) ?? []) {
+    const now = Date.now();
+    for (const client of [...(this.byUser.get(userId) ?? [])]) {
       if (client.ws.readyState !== WebSocket.OPEN) continue;
+      if (client.authExpiresAt !== undefined && client.authExpiresAt <= now) {
+        this.detachUser(client);
+        this.reject(client, 'UNAUTHORIZED', 'access token expired');
+        continue;
+      }
       // 주문 알림은 놓치면 안 되므로 시세처럼 건너뛰지 않는다(빈도가 낮다)
       client.ws.send(payload);
       this.metrics.inc('hoga_ws_messages_sent_total');
@@ -220,19 +238,27 @@ export class Gateway {
         this.sendJson(client, { t: 'pong', ts: Date.now() });
         return;
       case 'auth': {
-        const userId = this.authenticate(msg.token);
-        if (!userId) {
+        const auth = this.authenticate(msg.token);
+        if (!auth) {
+          // 틀린 토큰이면 이전 인증도 남기지 않는다
+          this.detachUser(client);
           this.reject(client, 'UNAUTHORIZED', 'invalid or expired token');
           return;
         }
-        if (client.userId) this.byUser.get(client.userId)?.delete(client);
+        const { userId } = auth;
+        this.detachUser(client);
         client.userId = userId;
+        client.authExpiresAt = auth.expiresAt;
         let set = this.byUser.get(userId);
         if (!set) this.byUser.set(userId, (set = new Set()));
         set.add(client);
         this.sendJson(client, { t: 'authed', userId });
         return;
       }
+      case 'unauth':
+        this.detachUser(client);
+        this.sendJson(client, { t: 'unauthed' });
+        return;
       case 'unsub':
         for (const symbol of msg.symbols) {
           client.subs.delete(symbol);
