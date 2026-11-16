@@ -16,11 +16,13 @@ export function useBook(symbol: string, depth = 10): BookState {
       const stale = book.sync === 'live' && Date.now() - book.lastUpdateMs > STALE_AFTER_MS;
       return {...book, stale};
     },
-    b => `${b.subscribed}|${b.seq}|${b.sync}|${b.stale}`,
+    b => `${b.subscribed}|${b.seq}|${b.sync}|${b.stale}|${sessionKey(b.session)}`,
     BOOK_REFRESH_HZ,
     [symbol, depth],
   );
 }
+
+const sessionKey = (s: BookView['session']) => `${s.phase}|${s.mode}|${s.viKind}|${s.viUntil}|${s.expPrice}|${s.expQty}`;
 
 export function useTrades(symbol: string, limit = 20): Trade[] {
   return usePolled(

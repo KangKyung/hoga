@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createServer, type HogaServer } from '../src/app.js';
+import { TEST_OPTIONS } from './fixtures.js';
 import { loadConfig } from '../src/config.js';
 
 const servers: HogaServer[] = [];
@@ -8,8 +9,7 @@ const ADMIN = 'test-admin-token-123';
 
 async function start(env: Record<string, string> = {}) {
   const server = createServer(
-    loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0', ADMIN_TOKEN: ADMIN, ...env }),
-  );
+    loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0', ADMIN_TOKEN: ADMIN, ...env }), TEST_OPTIONS);
   await server.start();
   servers.push(server);
   return server;

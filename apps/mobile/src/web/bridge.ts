@@ -9,6 +9,11 @@
  *   3) 속도: 초당 20개 초과 거절(버그·악성 스크립트가 앱을 바쁘게 만들지 못하게)
  *   4) 형식: JSON, 버전, type별 필드 검사
  * 그리고 openOrder는 주문을 내지 않는다. 앱이 주문 창을 열 뿐이고 사용자가 직접 확인해야 주문된다.
+ *
+ * 계좌 개설(웹 단계 화면) 전용
+ *   saveDraft / clearDraft: 신청서 ID·토큰을 앱 보안 저장소에 두었다가 다음에 이어서(웹 저장소는 쓰지 않는다)
+ *   captureIdCard: 앱이 카메라·앨범을 열고 사진을 직접 서버에 올린다. 웹에는 결과(idCardResult)만 간다
+ *   accountOpened: 끝. 앱이 로그인 화면으로 돌아가 아이디를 채운다
  */
 export const BRIDGE_PROTOCOL = 1;
 export const MAX_MESSAGE_BYTES = 4 * 1024;
@@ -22,7 +27,11 @@ export type WebToApp =
   | {
       type: 'track';
       payload: {name: string; params: Record<string, unknown>};
-    };
+    }
+  | {type: 'saveDraft'; payload: {id: string; token: string}}
+  | {type: 'clearDraft'; payload: Record<string, never>}
+  | {type: 'captureIdCard'; payload: Record<string, never>}
+  | {type: 'accountOpened'; payload: {username: string}};
 
 export type AppToWeb =
   | {
@@ -36,7 +45,9 @@ export type AppToWeb =
     }
   | {type: 'unsupported'; payload: {protocol: number}}
   | {type: 'quote'; payload: {symbol: string; price: number; ts: number}}
-  | {type: 'locale'; payload: {locale: string}};
+  | {type: 'locale'; payload: {locale: string}}
+  | {type: 'draft'; payload: {id: string | null; token: string | null}}
+  | {type: 'idCardResult'; payload: {ok: boolean; error?: string; bytes?: number}};
 
 export type RejectReason = 'origin' | 'schema' | 'version' | 'size' | 'rate';
 export type ParseResult = {ok: true; message: WebToApp} | {ok: false; reason: RejectReason; type: string};
@@ -44,6 +55,9 @@ export type ParseResult = {ok: true; message: WebToApp} | {ok: false; reason: Re
 const SYMBOL = /^\d{6}$/;
 const PAGE = /^[a-z_]{1,32}$/;
 const EVENT = /^[a-z][a-z0-9_]{0,39}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const APP_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+const USERNAME = /^[a-z][a-z0-9]{3,15}$/;
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -95,6 +109,16 @@ function validatePayload(type: string, payload: unknown): WebToApp | null {
           params: (payload.params as Record<string, unknown>) ?? {},
         },
       };
+    case 'saveDraft':
+      if (typeof payload.id !== 'string' || !UUID.test(payload.id)) return null;
+      if (typeof payload.token !== 'string' || !APP_TOKEN.test(payload.token)) return null;
+      return {type, payload: {id: payload.id, token: payload.token}};
+    case 'clearDraft':
+    case 'captureIdCard':
+      return {type, payload: {}};
+    case 'accountOpened':
+      if (typeof payload.username !== 'string' || !USERNAME.test(payload.username)) return null;
+      return {type, payload: {username: payload.username}};
     default:
       return null;
   }

@@ -45,6 +45,18 @@ export class UserStore {
     return { id: stored.id, username: stored.username, name: stored.name };
   }
 
+  has(username: string): boolean {
+    return this.byUsername.has(username);
+  }
+
+  /** 계좌 개설로 새 사용자. 이미 있으면 undefined */
+  add(user: User, password: string): User | undefined {
+    if (this.byUsername.has(user.username)) return undefined;
+    const salt = randomBytes(16);
+    this.byUsername.set(user.username, { ...user, salt, hash: hashPassword(password, salt) });
+    return { ...user };
+  }
+
   get(id: string): User | undefined {
     for (const u of this.byUsername.values()) if (u.id === id) return { id: u.id, username: u.username, name: u.name };
     return undefined;

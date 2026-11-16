@@ -62,6 +62,7 @@ async function post(key: string, draft: OrderDraft): Promise<PostResult> {
         type: draft.type,
         qty: draft.qty,
         ...(draft.type === 'limit' ? {price: draft.price} : {}),
+        ...(draft.amendOf ? {amendOf: draft.amendOf} : {}),
       },
     });
     return {kind: 'ok', record: data};
@@ -105,6 +106,8 @@ export const orderService = {
   reconcile: async () => runReconcile(await pendingOrders.list(), deps),
   list: async (symbol?: string) =>
     (await request<OrderRecord[]>(`/orders${symbol ? `?symbol=${symbol}` : ''}`, {auth: true})).data,
+  /** 미체결(잔량이 남은 주문) */
+  open: async () => (await request<OrderRecord[]>('/orders?status=open', {auth: true})).data,
   cancel: async (key: string) =>
     (await request<{status: string; reject: string}>(`/orders/${encodeURIComponent(key)}/cancel`, {method: 'POST', auth: true}))
       .data,

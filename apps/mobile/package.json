@@ -1,6 +1,6 @@
 {
   "name": "HogaApp",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
@@ -53,7 +53,8 @@
       "modulesProvider": {
         "NativeHogaCore": "HogaCoreModuleProvider",
         "NativeSecureStore": "HogaSecureStore",
-        "NativeDeviceGuard": "HogaDeviceGuard"
+        "NativeDeviceGuard": "HogaDeviceGuard",
+        "NativeDocumentCapture": "HogaDocumentCapture"
       },
       "componentProvider": {
         "HogaChartView": "HogaChartComponentView"

@@ -153,3 +153,100 @@ TEST(MatchingEngine, ConservesQuantityUnderRandomFlow) {
   if (!bids.empty() && !asks.empty()) EXPECT_LT(bids[0].price, asks[0].price);
   EXPECT_GT(filledTaker, 0);
 }
+
+// ---- 정정(잔량 축소) ----
+
+TEST(MatchingEngine, ReduceKeepsTimePriority) {
+  auto engine = makeEngine();
+  const auto first = engine.submit(limit(Side::Ask, 10'050, 10));
+  const auto second = engine.submit(limit(Side::Ask, 10'050, 5));
+  const auto reduced = engine.reduce(first.id, 4);
+  EXPECT_EQ(reduced.status, OrderStatus::New);
+  EXPECT_EQ(reduced.resting, 6);
+  EXPECT_EQ(reduced.changes, (std::vector<LevelChange>{{Side::Ask, 10'050, 11}}));
+  // 줄어든 첫 주문이 여전히 먼저 체결된다
+  const auto taker = engine.submit(limit(Side::Bid, 10'050, 6));
+  ASSERT_EQ(taker.fills.size(), 1u);
+  EXPECT_EQ(taker.fills[0].maker, first.id);
+  EXPECT_EQ(engine.depth(Side::Ask, 5), (std::vector<Level>{{10'050, 5}}));
+  (void)second;
+}
+
+TEST(MatchingEngine, ReduceAllIsCancelAndRejectsTooMuch) {
+  auto engine = makeEngine();
+  const auto order = engine.submit(limit(Side::Bid, 10'000, 3));
+  EXPECT_EQ(engine.reduce(order.id, 4).reject, RejectReason::ExceedsOpenQty);
+  EXPECT_EQ(engine.reduce(order.id, 0).reject, RejectReason::InvalidQty);
+  const auto all = engine.reduce(order.id, 3);
+  EXPECT_EQ(all.status, OrderStatus::Cancelled);
+  EXPECT_EQ(all.changes, (std::vector<LevelChange>{{Side::Bid, 10'000, 0}}));
+  EXPECT_EQ(engine.restingOrderCount(), 0u);
+  EXPECT_EQ(engine.reduce(order.id, 1).reject, RejectReason::UnknownOrder);
+}
+
+// ---- 단일가(동시호가) ----
+
+TEST(MatchingEngine, AuctionCollectsCrossingOrdersWithoutTrading) {
+  auto engine = makeEngine();
+  engine.setMode(hoga::TradingMode::Auction);
+  const auto bid = engine.submit(limit(Side::Bid, 10'100, 5));
+  const auto ask = engine.submit(limit(Side::Ask, 9'900, 3));
+  EXPECT_TRUE(bid.fills.empty());
+  EXPECT_TRUE(ask.fills.empty());
+  EXPECT_EQ(ask.status, OrderStatus::New);
+  EXPECT_EQ(engine.submit(market(Side::Bid, 1)).reject, RejectReason::MarketInAuction);
+  EXPECT_EQ(engine.depth(Side::Bid, 1), (std::vector<Level>{{10'100, 5}}));
+  EXPECT_EQ(engine.depth(Side::Ask, 1), (std::vector<Level>{{9'900, 3}}));
+}
+
+TEST(MatchingEngine, IndicativeMaximisesVolumeThenMinimisesImbalance) {
+  auto engine = makeEngine();
+  engine.setMode(hoga::TradingMode::Auction);
+  engine.submit(limit(Side::Bid, 10'100, 10));
+  engine.submit(limit(Side::Bid, 10'000, 10));
+  engine.submit(limit(Side::Ask, 9'950, 5));
+  engine.submit(limit(Side::Ask, 10'050, 10));
+  // 10,050: 매수 10 / 매도 15 → 10주, 10,000: 매수 20 / 매도 5 → 5주, 9,950: 매수 20 / 매도 5 → 5주
+  EXPECT_EQ(engine.indicative(10'000), (hoga::Indicative{10'050, 10}));
+}
+
+TEST(MatchingEngine, IndicativeTieBreaksTowardsReference) {
+  auto engine = makeEngine();
+  engine.setMode(hoga::TradingMode::Auction);
+  engine.submit(limit(Side::Bid, 10'100, 5));
+  engine.submit(limit(Side::Ask, 9'900, 5));
+  // 9,900 · 10,100 모두 5주, 남는 수량 0 → 기준가에 가까운 쪽
+  EXPECT_EQ(engine.indicative(10'000).qty, 5);
+  EXPECT_EQ(engine.indicative(9'950).price, 9'900);
+  EXPECT_EQ(engine.indicative(10'080).price, 10'100);
+}
+
+TEST(MatchingEngine, UncrossTradesEverythingAtOnePrice) {
+  auto engine = makeEngine();
+  engine.setMode(hoga::TradingMode::Auction);
+  const auto b1 = engine.submit(limit(Side::Bid, 10'100, 10));
+  engine.submit(limit(Side::Bid, 10'000, 10));
+  const auto a1 = engine.submit(limit(Side::Ask, 9'950, 5));
+  const auto a2 = engine.submit(limit(Side::Ask, 10'050, 10));
+  const auto result = engine.uncross(10'000);
+  EXPECT_EQ(result.filled, 10);
+  ASSERT_EQ(result.fills.size(), 2u);
+  for (const auto& fill : result.fills) EXPECT_EQ(fill.price, 10'050);
+  EXPECT_EQ(result.fills[0].taker, b1.id);
+  EXPECT_EQ(result.fills[0].maker, a1.id);
+  EXPECT_EQ(result.fills[1].maker, a2.id);
+  EXPECT_EQ(engine.lastPrice(), 10'050);
+  // 남은 것: 매수 10,000 × 10, 매도 10,050 × 5 → 더는 겹치지 않는다
+  EXPECT_EQ(engine.depth(Side::Bid, 5), (std::vector<Level>{{10'000, 10}}));
+  EXPECT_EQ(engine.depth(Side::Ask, 5), (std::vector<Level>{{10'050, 5}}));
+  EXPECT_EQ(engine.indicative(10'000).qty, 0);
+  EXPECT_EQ(engine.uncross(10'000).fills.size(), 0u);
+}
+
+TEST(MatchingEngine, HaltedRejectsNewOrdersButAllowsCancel) {
+  auto engine = makeEngine();
+  const auto order = engine.submit(limit(Side::Bid, 10'000, 3));
+  engine.setMode(hoga::TradingMode::Halted);
+  EXPECT_EQ(engine.submit(limit(Side::Bid, 10'000, 1)).reject, RejectReason::MarketClosed);
+  EXPECT_EQ(engine.cancel(order.id).status, OrderStatus::Cancelled);
+}

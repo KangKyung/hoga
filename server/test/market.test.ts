@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { InMemoryBus } from '../src/bus.js';
 import { Market } from '../src/market/market.js';
+import { CORE_SYMBOLS } from '../src/market/symbols.js';
 import { Metrics } from '../src/metrics.js';
 import type { DeltaMessage, SnapshotMessage } from '../src/protocol.js';
 
@@ -17,7 +18,7 @@ function seeded(seed: number) {
 function setup(dropSeqRate = 0) {
   const bus = new InMemoryBus();
   const metrics = new Metrics();
-  const market = new Market(bus, metrics, { dropSeqRate, random: seeded(7) });
+  const market = new Market(bus, metrics, { dropSeqRate, random: seeded(7), symbols: CORE_SYMBOLS });
   const deltas: DeltaMessage[] = [];
   bus.subscribeAll((_symbol, kind, payload) => {
     if (kind === 'book') deltas.push(JSON.parse(payload) as DeltaMessage);

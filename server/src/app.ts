@@ -2,7 +2,10 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 
+import { Ledger } from './account/ledger.js';
+import { AccountOpenService, registerAccountOpenRoutes } from './api/accountOpen.js';
 import { registerAdminRoutes, type FaultState } from './api/admin.js';
+import { AppConfigStore, registerAppConfigRoutes } from './api/appConfig.js';
 import { registerAuthRoutes } from './api/auth.js';
 import { registerOrderRoutes, type OrderRecord } from './api/orders.js';
 import { registerOtpRoutes } from './api/otp.js';
@@ -19,6 +22,7 @@ import { Gateway } from './gateway/gateway.js';
 import { BookReplica } from './gateway/replica.js';
 import { InMemoryIdempotencyStore } from './idempotency.js';
 import { Market, type MarketOptions } from './market/market.js';
+import { MarketSession } from './market/session.js';
 import { Metrics } from './metrics.js';
 import { OrderTracker } from './orders/tracker.js';
 import { SYMBOL_PATTERN } from './protocol.js';
@@ -30,6 +34,9 @@ import { RedisRefreshStore } from './redis/refreshStore.js';
 export interface HogaServer {
   app: FastifyInstance;
   market: Market;
+  session: MarketSession;
+  ledger: Ledger;
+  appConfig: AppConfigStore;
   /** ROLE=market이면 없다(WebSocket은 gateway 프로세스가 맡음) */
   gateway?: Gateway;
   metrics: Metrics;
@@ -71,8 +78,18 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     ? new RedisIdempotencyStore<OrderRecord>(redisBus.client, config.IDEMPOTENCY_TTL_MS)
     : new InMemoryIdempotencyStore<OrderRecord>(config.IDEMPOTENCY_TTL_MS);
   const tracker = new OrderTracker(market, bus);
+  const session = new MarketSession(market, bus, {
+    clock: config.SESSION_CLOCK,
+    viDurationMs: config.VI_DURATION_MS,
+    viStaticBps: config.VI_STATIC_BPS,
+    viDynamicBps: config.VI_DYNAMIC_BPS,
+  });
+  const ledger = new Ledger(market);
+  tracker.onChange((record) => ledger.onRecord(record));
+  const users = new UserStore();
+  const appConfig = new AppConfigStore();
   const auth = new AuthService(
-    new UserStore(),
+    users,
     authConfig(config),
     Date.now,
     redisBus ? new RedisRefreshStore(redisBus.client) : new InMemoryRefreshStore(),
@@ -85,7 +102,7 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
   // ROLE=market: WebSocket은 gateway 프로세스들이 맡는다
   const gateway =
     config.ROLE === 'all'
-      ? new Gateway(app.server, bus, market, metrics, config, log, (token) => {
+      ? new Gateway(app.server, bus, { has: (s) => market.has(s), snapshot: (s) => market.snapshot(s), status: (s) => session.status(s) }, metrics, config, log, (token) => {
           try {
             return auth.verify(token).sub;
           } catch {
@@ -105,7 +122,12 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
   app.get('/metrics', async (_request, reply) =>
     reply.type('text/plain; version=0.0.4').send(metrics.render()),
   );
+  // 점검 차단은 다른 라우트보다 먼저 걸어야 한다
+  registerAppConfigRoutes(app, appConfig);
+
   app.get('/symbols', async () => market.list());
+  /** 전 종목 매매 상태(gateway 복제본이 시작할 때 받는다) */
+  app.get('/market/status', async () => market.codes().map((code) => session.status(code)));
 
   app.get<{ Params: { symbol: string }; Querystring: { depth?: string } }>(
     '/book/:symbol',
@@ -144,10 +166,21 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     auth,
     otp,
     metrics,
+    ledger,
     responseDelayMs: () => faults.orderDelayMs,
   });
+  registerAccountOpenRoutes(app, new AccountOpenService(users, ledger));
   registerWebRoutes(app, { market, config });
-  registerAdminRoutes(app, { token: config.ADMIN_TOKEN, market, gateway: gatewayControl, metrics, faults, otp });
+  registerAdminRoutes(app, {
+    token: config.ADMIN_TOKEN,
+    market,
+    gateway: gatewayControl,
+    metrics,
+    faults,
+    otp,
+    session,
+    appConfig,
+  });
 
   let stopSimulator = () => {};
   const sweeper = setInterval(() => store.sweep(), 60_000);
@@ -156,6 +189,9 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
   return {
     app,
     market,
+    session,
+    ledger,
+    appConfig,
     gateway,
     metrics,
     log,
@@ -166,10 +202,12 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     },
     async start() {
       await app.listen({ host: config.HOST, port: config.PORT });
+      session.start();
       stopSimulator = market.startSimulator(config.SIM_INTERVAL_MS);
     },
     async stop() {
       stopSimulator();
+      session.stop();
       clearInterval(sweeper);
       tracker.close();
       await gateway?.close();
@@ -205,6 +243,7 @@ export function createGatewayServer(config: Config): GatewayServer {
   // 복제 장부를 gateway보다 먼저 구독해, 같은 메시지에서 장부가 먼저 바뀐 뒤 클라이언트로 나간다
   bus.subscribeAll((symbol, kind, payload) => {
     if (kind === 'book') replica.onBook(symbol, payload);
+    else if (kind === 'status') replica.onStatus(symbol, payload);
   });
   bus.onResubscribe(() => replica.resyncAll());
   const auth = new AuthService(new UserStore(), authConfig(config));

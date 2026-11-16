@@ -15,15 +15,22 @@ const BIOMETRY_LABEL: Record<BiometryType, string> = {
   none: '',
 };
 
-export function LoginScreen({state}: {state: Extract<SessionState, {status: 'signedOut' | 'locked'}>}) {
+interface Props {
+  state: Extract<SessionState, {status: 'signedOut' | 'locked'}>;
+  /** 계좌 개설 직후: 새 아이디를 채워 둔다 */
+  initialUsername?: string;
+  onOpenAccount?: () => void;
+}
+
+export function LoginScreen({state, initialUsername, onOpenAccount}: Props) {
   const {t} = useI18n();
   const method = (b: BiometryType) => BIOMETRY_LABEL[b] || t(b === 'none' ? 'biometry.generic' : 'biometry.biometric');
-  const [username, setUsername] = useState('demo');
+  const [username, setUsername] = useState(initialUsername ?? 'demo');
   const [password, setPassword] = useState('');
   // Return 키(onSubmitEditing)는 마지막 입력의 onChangeText·재렌더보다 먼저 올 수 있다.
   // 렌더 시점 값을 쓰면 빈 비밀번호가 전송되므로, 입력 즉시 갱신되는 ref와
   // Return 이벤트가 실어 오는 네이티브 입력값(nativeEvent.text)을 쓴다.
-  const latest = useRef({username: 'demo', password: ''});
+  const latest = useRef({username: initialUsername ?? 'demo', password: ''});
   const onUsername = (v: string) => {
     latest.current.username = v;
     setUsername(v);
@@ -124,7 +131,18 @@ export function LoginScreen({state}: {state: Extract<SessionState, {status: 'sig
         onPress={() => submit()}>
         {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>{t('login.submit')}</Text>}
       </Pressable>
-      <Text style={styles.hint}>{t('login.devHint')}</Text>
+      {initialUsername ? (
+        <Text testID="accountOpened" style={styles.opened}>
+          {t('login.accountOpened', {username: initialUsername})}
+        </Text>
+      ) : (
+        <Text style={styles.hint}>{t('login.devHint')}</Text>
+      )}
+      {onOpenAccount ? (
+        <Pressable testID="openAccountOpen" style={styles.link} onPress={onOpenAccount}>
+          <Text style={styles.linkText}>{t('login.openAccount')}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -169,4 +187,5 @@ const styles = StyleSheet.create({
   link: {alignItems: 'center', padding: 8},
   linkText: {color: colors.accent},
   hint: {color: colors.mute, fontSize: 12, textAlign: 'center'},
+  opened: {color: colors.accent, fontSize: 13, textAlign: 'center', fontWeight: '600'},
 });

@@ -5,11 +5,13 @@ import {track} from '../analytics/analytics';
 import type {SymbolInfo} from '../api/symbols';
 import {ChartPanel} from '../components/ChartPanel';
 import {MyOrders} from '../components/MyOrders';
+import {SessionStrip} from '../components/SessionStrip';
 import {StatusBadge} from '../components/StatusBadge';
 import {useBook, useConnectionState, useStats, useTrades} from '../hooks/market';
 import type {Level, Trade} from '../native/hogaCore';
 import type {Side} from '../orders/types';
 import {useI18n} from '../i18n';
+import {useSubscription} from '../market/subscriptions';
 import {colors, formatChange, formatPrice, mono, priceColor} from '../theme';
 import {HogaWebView, type HogaWebViewHandle} from '../web/HogaWebView';
 import {OrderSheet, type OrderEntry} from './OrderSheet';
@@ -26,6 +28,7 @@ interface Props {
 
 export function QuoteScreen({symbol, onBack}: Props) {
   const {t, locale} = useI18n();
+  useSubscription([symbol.code]);
   const connection = useConnectionState();
   const book = useBook(symbol.code, DEPTH);
   const trades = useTrades(symbol.code, 12);
@@ -100,6 +103,7 @@ export function QuoteScreen({symbol, onBack}: Props) {
         </Text>
         <Text style={[styles.change, mono, {color: priceTint}]}>{formatChange(lastPrice, symbol.basePrice)}</Text>
       </View>
+      <SessionStrip session={book.session} />
 
       <View style={styles.tabs}>
         {TABS.map(k => (

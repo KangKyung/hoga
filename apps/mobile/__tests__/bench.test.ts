@@ -33,6 +33,7 @@ describe('JsBook (JS-routed comparison path)', () => {
     const view = book.view(2);
     expect(view).toEqual({
       subscribed: true,
+      session: {phase: '', mode: '', viKind: '', viUntil: 0, viRef: 0, expPrice: 0, expQty: 0},
       seq: 12,
       sync: 'live',
       bids: [

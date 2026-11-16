@@ -36,6 +36,17 @@ struct Trade {
   std::int64_t ts{0};
 };
 
+// 서버 status 메시지(장 구간·매매 방식·VI·단일가 예상 체결). 받기 전에는 phase가 비어 있다.
+struct SessionView {
+  std::string phase;   // PRE_OPEN | OPEN | CLOSING | CLOSED
+  std::string mode;    // CONTINUOUS | AUCTION | HALTED
+  std::string viKind;  // 비어 있으면 VI 아님, STATIC | DYNAMIC
+  std::int64_t viUntil{0};
+  Price viRef{0};
+  Price expPrice{0};  // 단일가 예상 체결가(0이면 없음)
+  Qty expQty{0};
+};
+
 // JS·UI가 읽어 가는 한 종목의 화면용 사본.
 struct BookView {
   bool subscribed{false};
@@ -44,6 +55,7 @@ struct BookView {
   std::vector<Level> bids;
   std::vector<Level> asks;
   std::int64_t lastUpdateMs{0};  // 마지막으로 호가가 바뀐 시각(epoch ms)
+  SessionView session;
 };
 
 struct ClientStats {
@@ -131,6 +143,7 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
     bool snapshotInFlight{false};
     std::unique_ptr<CandleSeries> candles;
     bool candlesInFlight{false};
+    SessionView session;
   };
   using Deferred = std::vector<std::function<void()>>;
 

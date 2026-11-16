@@ -113,24 +113,71 @@
           <p class="mute small" ng-if="vm.lastAction">{{ vm.lastAction }}</p>
         </section>
 
-        <!-- 종목별 변동성 -->
+        <!-- 장 운영 · 앱 배포 -->
+        <section class="card session">
+          <h2>장 운영 구간</h2>
+          <div class="row">
+            <span>지금: <b>{{ vm.phaseLabel(vm.state.session.phase) }}</b></span>
+            <small class="mute">시계: {{ vm.state.session.clock === 'krx' ? '서울 시각(KRX 정규장)' : '수동' }}</small>
+          </div>
+          <div class="buttons phases">
+            <button type="button" ng-repeat="p in vm.phases" ng-class="{ primary: vm.state.session.phase === p.code }"
+                    ng-disabled="vm.busy || vm.state.session.clock !== 'manual'" ng-click="vm.setPhase(p.code)">{{ p.label }}</button>
+          </div>
+          <p class="mute small">동시호가 → 장중·장 종료로 넘어갈 때 모인 주문을 한 가격에 체결합니다(C++ uncross).</p>
+          <p class="small" ng-if="vm.state.session.vi.length">
+            VI 발동: <span ng-repeat="v in vm.state.session.vi">{{ v.symbol }}({{ v.kind === 'STATIC' ? '정적' : '동적' }}, {{ vm.secondsLeft(v.until) }}초) </span>
+          </p>
+
+          <hr />
+          <h2>앱 배포 · 점검</h2>
+          <label class="row">
+            <span>최소 버전(미만이면 강제 업데이트)</span>
+            <input type="text" ng-model="vm.appForm.minVersion" ng-change="vm.appDirty = true" placeholder="0.8.0" />
+          </label>
+          <label class="row">
+            <span>최신 버전(미만이면 업데이트 안내)</span>
+            <input type="text" ng-model="vm.appForm.latestVersion" ng-change="vm.appDirty = true" placeholder="0.8.0" />
+          </label>
+          <label class="row">
+            <span>서비스 점검</span>
+            <input type="checkbox" ng-model="vm.appForm.maintenance" ng-change="vm.appDirty = true" />
+          </label>
+          <label class="row" ng-if="vm.appForm.maintenance">
+            <span>점검 종료(분 뒤)</span>
+            <input type="number" min="1" max="600" ng-model="vm.appForm.minutes" ng-change="vm.appDirty = true" />
+          </label>
+          <div class="buttons">
+            <button type="button" class="primary" ng-disabled="!vm.appDirty || vm.busy" ng-click="vm.applyAppConfig()">적용</button>
+          </div>
+        </section>
+
+        <!-- 종목별 변동성 · VI -->
         <section class="card symbols">
-          <h2>종목별 변동성</h2>
+          <h2>종목별 변동성 · VI <small class="mute">({{ vm.state.symbols.length }}종목 중 {{ vm.symbolLimit }}개)</small></h2>
           <table>
             <thead>
-              <tr><th>종목</th><th class="num">현재가</th><th class="num">기준 대비</th><th>변동성</th></tr>
+              <tr><th>종목</th><th class="num">현재가</th><th class="num">기준 대비</th><th>변동성</th><th>VI</th></tr>
             </thead>
             <tbody>
-              <tr ng-repeat="s in vm.state.symbols track by s.code">
+              <tr ng-repeat="s in vm.state.symbols | limitTo:vm.symbolLimit track by s.code">
                 <td>{{ s.name }} <span class="mute">{{ s.code }}</span></td>
                 <td class="num mono">{{ s.lastPrice | number }}</td>
                 <td class="num mono" ng-class="vm.tone(s)">{{ vm.changePct(s) | number:2 }}%</td>
                 <td>
                   <select ng-model="s.volatility" ng-options="v as ('× ' + v) for v in vm.volOptions" ng-change="vm.setVolatility(s)"></select>
                 </td>
+                <td>
+                  <button type="button" class="small" ng-if="!vm.viOf(s.code)" ng-disabled="vm.state.session.phase !== 'OPEN'"
+                          ng-click="vm.vi(s, 'trigger')">발동</button>
+                  <button type="button" class="small danger" ng-if="vm.viOf(s.code)" ng-click="vm.vi(s, 'release')">해제</button>
+                </td>
               </tr>
             </tbody>
           </table>
+          <button type="button" class="link" ng-click="vm.symbolLimit = vm.symbolLimit === 10 ? 200 : 10">
+            {{ vm.symbolLimit === 10 ? '전체 보기' : '접기' }}
+          </button>
         </section>
       </div>
 

@@ -90,6 +90,20 @@ jsi::Object NativeHogaCore::priceLimits(jsi::Runtime& rt, double basePrice) {
   return out;
 }
 
+std::string NativeHogaCore::checkAccount(jsi::Runtime& rt, jsi::String side, jsi::String type, double price,
+                                         double qty, double availableCash, double sellableQty, double upperLimit) {
+  const auto s = side.utf8(rt);
+  const auto t = type.utf8(rt);
+  if (s != "bid" && s != "ask") throw jsi::JSError(rt, "side must be 'bid' or 'ask'");
+  if (t != "limit" && t != "market") throw jsi::JSError(rt, "type must be 'limit' or 'market'");
+  if (!std::isfinite(qty) || std::floor(qty) != qty) return std::string(hoga::toString(hoga::RejectReason::InvalidQty));
+  const hoga::OrderRequest order{s == "bid" ? hoga::Side::Bid : hoga::Side::Ask,
+                                 t == "limit" ? hoga::OrderType::Limit : hoga::OrderType::Market,
+                                 requirePrice(rt, price), static_cast<hoga::Qty>(qty)};
+  const hoga::AccountLimits limits{requirePrice(rt, availableCash), requirePrice(rt, sellableQty)};
+  return std::string(hoga::toString(hoga::checkAccount(order, limits, requirePrice(rt, upperLimit))));
+}
+
 std::string NativeHogaCore::validateOrder(jsi::Runtime& rt, jsi::String side, jsi::String type, double price,
                                           double qty, double basePrice) {
   const auto s = side.utf8(rt);
@@ -183,6 +197,16 @@ jsi::Object NativeHogaCore::getBook(jsi::Runtime& rt, jsi::String symbol, double
   out.setProperty(rt, "bids", levelsToJs(rt, view.bids));
   out.setProperty(rt, "asks", levelsToJs(rt, view.asks));
   out.setProperty(rt, "lastUpdateMs", static_cast<double>(view.lastUpdateMs));
+  // 매매 상태(장 구간·VI·단일가 예상 체결). status를 아직 못 받았으면 phase가 빈 문자열
+  jsi::Object session(rt);
+  session.setProperty(rt, "phase", str(rt, view.session.phase));
+  session.setProperty(rt, "mode", str(rt, view.session.mode));
+  session.setProperty(rt, "viKind", str(rt, view.session.viKind));
+  session.setProperty(rt, "viUntil", static_cast<double>(view.session.viUntil));
+  session.setProperty(rt, "viRef", static_cast<double>(view.session.viRef));
+  session.setProperty(rt, "expPrice", static_cast<double>(view.session.expPrice));
+  session.setProperty(rt, "expQty", static_cast<double>(view.session.expQty));
+  out.setProperty(rt, "session", session);
   return out;
 }
 

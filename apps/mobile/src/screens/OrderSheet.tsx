@@ -1,7 +1,10 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
 
+import {accountApi, type Orderable} from '../api/account';
 import type {SymbolInfo} from '../api/symbols';
+import {useBook} from '../hooks/market';
+import {useSubscription} from '../market/subscriptions';
 import {hogaCore} from '../native/hogaCore';
 import {OTP_CANCELLED, UNCONFIRMED, type OrderProgress} from '../orders/placeOrder';
 import {otp} from '../auth/otp';
@@ -18,7 +21,13 @@ const rejectText = (code: string | undefined) => {
   return text === key ? code ?? '' : text;
 };
 
-export type OrderEntry = 'book' | 'button' | 'web';
+export type OrderEntry = 'book' | 'button' | 'web' | 'account';
+
+/** 정정: 원주문 키·미체결 잔량. 매수/매도·지정가는 바꿀 수 없고 가격·수량(잔량 이하)만 */
+export interface AmendTarget {
+  key: string;
+  resting: number;
+}
 
 interface Props {
   symbol: SymbolInfo;
@@ -26,15 +35,23 @@ interface Props {
   initialPrice: number;
   /** 어디서 열었는지(분석용). web이면 웹 화면에서 연 주문이라고 알려 준다 */
   entry?: OrderEntry;
+  amend?: AmendTarget;
   onClose: () => void;
 }
 
-export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button', onClose}: Props) {
+/** 주문가능 조회를 가격 변경마다 바로 하지 않고 잠깐 모아서 */
+const ORDERABLE_DEBOUNCE_MS = 250;
+
+export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button', amend, onClose}: Props) {
   useI18n();
+  // 주문 창이 떠 있는 동안은 이 종목의 매매 상태(장 구간·VI)를 받아야 한다(계좌 화면에서 열 때도)
+  useSubscription([symbol.code]);
+  const session = useBook(symbol.code, 1).session;
   const [side, setSide] = useState<Side>(initialSide);
   const [type, setType] = useState<OrderType>('limit');
   const [price, setPrice] = useState(initialPrice);
-  const [qtyText, setQtyText] = useState('10');
+  const [qtyText, setQtyText] = useState(String(amend?.resting ?? 10));
+  const [orderable, setOrderable] = useState<Orderable | null>(null);
   const [progress, setProgress] = useState<OrderProgress | null>(null);
   // OTP 입력을 기다리는 주문(placeOrder가 await 중). true = 인증 끝, false = 취소
   const otpWaiter = useRef<((ok: boolean) => void) | null>(null);
@@ -44,14 +61,38 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
 
   const qty = Number(qtyText);
   const limits = useMemo(() => hogaCore.priceLimits(symbol.basePrice), [symbol.basePrice]);
+  const safeQty = Number.isFinite(qty) ? qty : 0;
+  const orderPrice = type === 'limit' ? price : 0;
+
+  // 주문가능(서버 원장). 매수/매도·가격·유형이 바뀌면 다시
+  useEffect(() => {
+    let alive = true;
+    const timer = setTimeout(() => {
+      accountApi
+        .orderable({symbol: symbol.code, side, type, price})
+        .then(o => alive && setOrderable(o))
+        .catch(() => alive && setOrderable(null));
+    }, ORDERABLE_DEBOUNCE_MS);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [symbol.code, side, type, price, progress?.phase]);
+
   // 서버와 같은 C++ 규칙으로 미리 검사 → 보내기 전에 막는다
-  const reject = hogaCore.validateOrder(
-    side,
-    type,
-    type === 'limit' ? price : 0,
-    Number.isFinite(qty) ? qty : 0,
-    symbol.basePrice,
-  );
+  //  1) 호가단위·가격제한폭·수량  2) 장 구간(장 종료·단일가 시장가)  3) 주문가능금액·매도가능수량
+  const rule = hogaCore.validateOrder(side, type, orderPrice, safeQty, symbol.basePrice);
+  const sessionReject =
+    session.mode === 'HALTED' ? 'MARKET_CLOSED' : session.mode === 'AUCTION' && type === 'market' ? 'MARKET_IN_AUCTION' : 'NONE';
+  const accountReject = amend
+    ? safeQty > amend.resting
+      ? 'EXCEEDS_OPEN_QTY'
+      : 'NONE' // 정정은 원주문이 묶어 둔 금액을 옮기므로 서버가 최종 확인
+    : orderable
+    ? hogaCore.checkAccount(side, type, orderPrice, safeQty, orderable, limits.upper)
+    : 'NONE';
+  const reject = rule !== 'NONE' ? rule : sessionReject !== 'NONE' ? sessionReject : accountReject;
+  const maxQty = amend ? amend.resting : orderable?.maxQty ?? 0;
   const inFlight = progress?.phase === 'submitting' || progress?.phase === 'confirming';
   const done = progress?.phase === 'accepted' || progress?.phase === 'rejected' || progress?.phase === 'failed';
   const askingOtp = progress?.phase === 'otp';
@@ -135,7 +176,7 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
 
   const submit = async () => {
     if (inFlight || reject !== 'NONE') return; // 중복 탭·잘못된 주문 차단
-    track('submit_order', {symbol: symbol.code, side, order_type: type});
+    track(amend ? 'submit_amend' : 'submit_order', {symbol: symbol.code, side, order_type: type});
     await orderService.place(
       {
         symbol: symbol.code,
@@ -143,6 +184,7 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
         type,
         price: type === 'limit' ? price : 0,
         qty,
+        ...(amend ? {amendOf: amend.key} : {}),
       },
       onProgress,
       requestOtp,
@@ -158,6 +200,7 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
           <View style={styles.header}>
             <Text style={styles.title}>
               {symbol.name} <Text style={styles.code}>{symbol.code}</Text>
+              {amend ? <Text style={styles.amendTag}>{`  ${t('order.amendTitle')}`}</Text> : null}
             </Text>
             <Pressable testID="closeOrder" disabled={inFlight} onPress={close} hitSlop={12}>
               <Text style={[styles.close, inFlight && styles.disabledText]}>{t('common.close')}</Text>
@@ -175,7 +218,7 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
               <Pressable
                 key={s}
                 testID={`side-${s}`}
-                disabled={inFlight}
+                disabled={inFlight || Boolean(amend)}
                 onPress={() => setSide(s)}
                 style={[
                   styles.segmentItem,
@@ -194,7 +237,8 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
             {(['limit', 'market'] as const).map(o => (
               <Pressable
                 key={o}
-                disabled={inFlight}
+                testID={`type-${o}`}
+                disabled={inFlight || Boolean(amend) || (o === 'market' && session.mode === 'AUCTION')}
                 onPress={() => setType(o)}
                 style={[styles.segmentItem, type === o && styles.segmentNeutral]}>
                 <Text style={[styles.segmentText, type === o && styles.segmentTextActive]}>
@@ -232,7 +276,27 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
           ) : null}
 
           <View style={styles.field}>
-            <Text style={styles.label}>{t('order.qty')}</Text>
+            <View style={styles.qtyLabelRow}>
+              <Text style={styles.label}>{t('order.qty')}</Text>
+              <Text testID="orderable" style={[styles.orderable, mono]}>
+                {amend
+                  ? t('order.amendable', {qty: formatPrice(amend.resting)})
+                  : orderable
+                  ? t(side === 'bid' ? 'order.orderableBuy' : 'order.orderableSell', {
+                      qty: formatPrice(orderable.maxQty),
+                      cash: formatPrice(orderable.availableCash),
+                    })
+                  : ''}
+              </Text>
+              <Pressable
+                testID="maxQty"
+                disabled={inFlight || maxQty <= 0}
+                onPress={() => setQtyText(String(maxQty))}
+                hitSlop={8}
+                style={[styles.maxBtn, maxQty <= 0 && styles.disabled]}>
+                <Text style={styles.maxText}>{t('order.max')}</Text>
+              </Pressable>
+            </View>
             <TextInput
               testID="orderQty"
               style={[styles.qtyInput, mono]}
@@ -306,9 +370,11 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.submitText}>
-                  {t('order.submit', {
-                    side: t(side === 'bid' ? 'common.buy' : 'common.sell'),
-                  })}
+                  {amend
+                    ? t('order.amendSubmit')
+                    : t('order.submit', {
+                        side: t(side === 'bid' ? 'common.buy' : 'common.sell'),
+                      })}
                 </Text>
               )}
             </Pressable>
@@ -434,6 +500,11 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   amount: {textAlign: 'right', color: colors.sub},
+  qtyLabelRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  orderable: {flex: 1, textAlign: 'right', fontSize: 12, color: colors.sub},
+  maxBtn: {paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: colors.line},
+  maxText: {fontSize: 12, fontWeight: '700', color: colors.accent},
+  amendTag: {fontSize: 14, fontWeight: '700', color: colors.accent},
   error: {color: colors.danger},
   notice: {
     fontSize: 13,

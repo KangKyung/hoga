@@ -8,6 +8,7 @@ import {
   type CandleRow,
   type ExecutionResult,
   type OrderRequest,
+  type TradingMode,
 } from '../core.js';
 import type { Metrics } from '../metrics.js';
 import { toWireSide, type DeltaMessage, type SnapshotMessage, type TradeMessage } from '../protocol.js';
@@ -99,6 +100,48 @@ export class Market {
     return this.states.has(symbol);
   }
 
+  codes(): string[] {
+    return [...this.states.keys()];
+  }
+
+  info(symbol: string): SymbolInfo {
+    return this.require(symbol).info;
+  }
+
+  /** 최근 체결가(없으면 기준가) */
+  lastPrice(symbol: string): number {
+    const state = this.require(symbol);
+    return state.engine.lastPrice ?? state.info.basePrice;
+  }
+
+  upperLimit(symbol: string): number {
+    return priceLimits(this.require(symbol).info.basePrice).upper;
+  }
+
+  // ---- 매매 방식(장 운영 구간·VI) ----
+
+  mode(symbol: string): TradingMode {
+    return this.require(symbol).engine.mode;
+  }
+
+  setMode(symbol: string, mode: TradingMode): void {
+    this.require(symbol).engine.mode = mode;
+  }
+
+  /** 단일가 예상 체결(기준: 최근 체결가) */
+  indicative(symbol: string): { price: number; qty: number } {
+    return this.require(symbol).engine.indicative(this.lastPrice(symbol));
+  }
+
+  /** 단일가 체결. 체결 알림·시세는 접속매매와 같은 경로로 나간다 */
+  uncross(symbol: string): ExecutionResult {
+    const state = this.require(symbol);
+    const result = state.engine.uncross(this.lastPrice(symbol));
+    this.publish(state, result, 'bid');
+    for (const listener of this.listeners) listener(symbol, result);
+    return result;
+  }
+
   list() {
     return [...this.states.values()].map(({ info, engine }) => ({
       ...info,
@@ -168,6 +211,15 @@ export class Market {
     return result;
   }
 
+  /** 미체결 잔량을 qty만큼 줄인다(정정). 남은 수량의 시간 우선순위는 그대로 */
+  reduce(symbol: string, orderId: number, qty: number): ExecutionResult {
+    const state = this.require(symbol);
+    const result = state.engine.reduce(orderId, qty);
+    this.publish(state, result, null);
+    for (const listener of this.listeners) listener(symbol, result);
+    return result;
+  }
+
   cancel(symbol: string, orderId: number): ExecutionResult {
     const state = this.require(symbol);
     const result = state.engine.cancel(orderId);
@@ -190,7 +242,11 @@ export class Market {
     }
     const timer = setInterval(() => {
       for (let i = 0; i < this.simBurst; i++) {
-        for (const state of this.states.values()) this.simulateOnce(state);
+        for (const state of this.states.values()) {
+          // 거래가 드문 종목은 가끔만
+          if (state.info.activity !== undefined && this.random() >= state.info.activity) continue;
+          this.simulateOnce(state);
+        }
       }
     }, this.simIntervalMs);
     timer.unref();
@@ -293,6 +349,7 @@ export class Market {
 
   private simulateOnce(state: SymbolState): void {
     const { engine, info } = state;
+    if (engine.mode === 'HALTED') return; // 장 종료: 새 호가 없음
     const ref = engine.lastPrice ?? info.basePrice;
     const band = priceLimits(info.basePrice);
     const clamp = (p: number) => Math.min(band.upper, Math.max(band.lower, p));

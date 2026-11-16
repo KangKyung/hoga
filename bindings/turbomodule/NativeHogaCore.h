@@ -22,6 +22,9 @@ class NativeHogaCore : public NativeHogaCoreCxxSpec<NativeHogaCore> {
   jsi::Object priceLimits(jsi::Runtime& rt, double basePrice);
   std::string validateOrder(jsi::Runtime& rt, jsi::String side, jsi::String type, double price, double qty,
                             double basePrice);
+  // 주문가능금액·매도가능수량(서버가 준 한도)으로 C++ checkAccount. 'NONE' | 'INSUFFICIENT_CASH' | ...
+  std::string checkAccount(jsi::Runtime& rt, jsi::String side, jsi::String type, double price, double qty,
+                           double availableCash, double sellableQty, double upperLimit);
   std::string randomId(jsi::Runtime& rt);
 
   void connect(jsi::Runtime& rt, jsi::String wsUrl, jsi::String httpBaseUrl);

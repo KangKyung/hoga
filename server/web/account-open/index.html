@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Open an account</title>
+    <link rel="stylesheet" href="/web/shared/base.css" />
+    <link rel="stylesheet" href="/web/account-open/open.css?v=2" />
+    <script src="/web-config.js"></script>
+    <script src="/web/shared/bridge.js"></script>
+    <script src="/web/shared/i18n.js"></script>
+    <script src="/web/shared/analytics.js"></script>
+    <script src="/web/account-open/open.js?v=2" defer></script>
+  </head>
+  <body>
+    <main class="page" id="root" aria-busy="true">
+      <header class="head">
+        <p id="stepLabel" class="mute small"></p>
+        <h1 id="stepTitle"></h1>
+        <ol class="progress" id="progress" aria-hidden="true">
+          <li></li><li></li><li></li><li></li><li></li>
+        </ol>
+      </header>
+
+      <p id="notice" class="notice hidden" role="status"></p>
+      <p id="error" class="error hidden" role="alert"></p>
+
+      <!-- 1. 약관 -->
+      <section class="card step" data-step="terms">
+        <label class="check all"><input type="checkbox" id="agreeAll" /> <span data-i18n="web.open.agreeAll"></span></label>
+        <hr />
+        <label class="check"><input type="checkbox" id="agreeTerms" class="agree" /> <span data-i18n="web.open.terms"></span></label>
+        <label class="check"><input type="checkbox" id="agreePrivacy" class="agree" /> <span data-i18n="web.open.privacy"></span></label>
+        <label class="check"><input type="checkbox" id="agreeMarketing" class="agree" /> <span data-i18n="web.open.marketing"></span></label>
+        <button id="termsNext" class="primary" type="button" data-i18n="web.open.next" disabled></button>
+      </section>
+
+      <!-- 2. 본인 정보 -->
+      <section class="card step" data-step="profile">
+        <label class="field"><span data-i18n="web.open.name"></span><input id="name" autocomplete="name" maxlength="20" /></label>
+        <label class="field"><span data-i18n="web.open.birth"></span><input id="birth" inputmode="numeric" maxlength="8" /></label>
+        <label class="field"><span data-i18n="web.open.phone"></span><input id="phone" inputmode="tel" maxlength="11" /></label>
+        <label class="field"
+          ><span data-i18n="web.open.username"></span><input id="username" autocapitalize="none" autocomplete="username" maxlength="16"
+        /></label>
+        <button id="profileNext" class="primary" type="button" data-i18n="web.open.next"></button>
+      </section>
+
+      <!-- 3. 휴대폰 인증 -->
+      <section class="card step" data-step="phone">
+        <button id="sendCode" class="secondary" type="button" data-i18n="web.open.sendCode"></button>
+        <p id="sentTo" class="mute small"></p>
+        <p id="devCode" class="dev small hidden"></p>
+        <label class="field"><span data-i18n="web.open.code"></span><input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></label>
+        <button id="verifyCode" class="primary" type="button" data-i18n="web.open.verify" disabled></button>
+      </section>
+
+      <!-- 4. 신분증 -->
+      <section class="card step" data-step="idcard">
+        <div class="idframe" aria-hidden="true"><span>ID</span></div>
+        <p class="guide" data-i18n="web.open.idcardGuide"></p>
+        <button id="capture" class="primary" type="button" data-i18n="web.open.capture"></button>
+      </section>
+
+      <!-- 5. 비밀번호 -->
+      <section class="card step" data-step="done">
+        <p id="verified" class="ok small"></p>
+        <label class="field"><span data-i18n="web.open.password"></span><input id="password" type="password" autocomplete="new-password" /></label>
+        <label class="field"
+          ><span data-i18n="web.open.passwordConfirm"></span><input id="password2" type="password" autocomplete="new-password"
+        /></label>
+        <label class="field"><span data-i18n="web.open.pin"></span><input id="pin" type="password" inputmode="numeric" maxlength="4" /></label>
+        <button id="complete" class="primary" type="button" data-i18n="web.open.submit"></button>
+      </section>
+
+      <!-- 완료 -->
+      <section class="card step finished" data-step="finished">
+        <p class="check-mark" aria-hidden="true">✓</p>
+        <h2 data-i18n="web.open.doneTitle"></h2>
+        <p id="accountNo" class="mono"></p>
+        <p class="mute small" data-i18n="web.open.deposit"></p>
+        <button id="goLogin" class="primary" type="button" data-i18n="web.open.goLogin"></button>
+      </section>
+
+      <button id="restart" class="link hidden" type="button" data-i18n="web.open.restart"></button>
+    </main>
+  </body>
+</html>

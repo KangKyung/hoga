@@ -337,6 +337,26 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
       return;
     }
     const auto symbol = msg.value("sym", std::string{});
+    if (type == "status") {
+      // 매매 상태는 시세 순서(seq)와 무관하다. 구독 중인 종목만 덮어쓴다(빈도가 낮아 JS로 밀지 않고 book()에 싣는다)
+      auto it = symbols_.find(symbol);
+      if (it == symbols_.end()) return;
+      SessionView view;
+      view.phase = msg.value("phase", std::string{});
+      view.mode = msg.value("mode", std::string{});
+      if (const auto vi = msg.find("vi"); vi != msg.end() && vi->is_object()) {
+        view.viKind = vi->value("kind", std::string{});
+        view.viUntil = vi->value("until", std::int64_t{0});
+        view.viRef = vi->value("ref", Price{0});
+      }
+      if (const auto exp = msg.find("exp"); exp != msg.end() && exp->is_object()) {
+        view.expPrice = exp->value("px", Price{0});
+        view.expQty = exp->value("qty", Qty{0});
+      }
+      it->second.session = std::move(view);
+      it->second.lastUpdateMs = options_.nowMs();
+      return;
+    }
     if (type == "snap") {
       const auto bids = parseLevels(msg.at("bids"));
       const auto asks = parseLevels(msg.at("asks"));
@@ -506,6 +526,7 @@ BookView MarketClient::book(const std::string& symbol, std::size_t depth) const 
   view.bids = book.top(Side::Bid, depth);
   view.asks = book.top(Side::Ask, depth);
   view.lastUpdateMs = data.lastUpdateMs;
+  view.session = data.session;
   return view;
 }
 

@@ -6,12 +6,20 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { Bus, MessageKind } from '../bus.js';
 import type { Config } from '../config.js';
 import type { Metrics } from '../metrics.js';
-import { clientMessage, type ErrorMessage, type ServerMessage, type SnapshotMessage } from '../protocol.js';
+import {
+  clientMessage,
+  type ErrorMessage,
+  type ServerMessage,
+  type SnapshotMessage,
+  type StatusMessage,
+} from '../protocol.js';
 import { encode, encodeJson } from '../wire.js';
 
 export interface SnapshotProvider {
   has(symbol: string): boolean;
   snapshot(symbol: string): SnapshotMessage;
+  /** 매매 상태(장 구간·VI·예상 체결가). 구독 직후 스냅샷 다음에 보낸다 */
+  status?(symbol: string): StatusMessage | undefined;
 }
 
 type GatewayConfig = Pick<
@@ -250,6 +258,8 @@ export class Gateway {
           set.add(client);
           // 구독 직후 스냅샷. 한 이벤트 루프 안이라 이후 변경분은 반드시 이 seq 다음부터 온다.
           this.sendJson(client, this.snapshots.snapshot(symbol));
+          const status = this.snapshots.status?.(symbol);
+          if (status) this.sendJson(client, status);
         }
         this.sendJson(client, { t: 'subscribed', symbols: [...client.subs] });
         return;
@@ -274,6 +284,13 @@ export class Gateway {
     if (buffered > this.config.WS_HARD_BUFFER_BYTES) {
       this.metrics.inc('hoga_ws_closed_slow_total');
       ws.close(CLOSE_TRY_AGAIN_LATER, 'client too slow');
+      return;
+    }
+
+    if (kind === 'status') {
+      // 드물고 중요하다(장 종료·VI): 느린 클라이언트에도 건너뛰지 않는다. 이진 연결에도 JSON 그대로
+      ws.send(payload);
+      this.metrics.inc('hoga_ws_messages_sent_total');
       return;
     }
 

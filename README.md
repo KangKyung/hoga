@@ -16,7 +16,44 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | M4 | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | 완료 |
 | M5 | 웹 화면(HTML/JS·AngularJS) + 웹뷰 브리지 · AngularJS 관리 콘솔 · 분석 이벤트 분류표 · ko/en/id/th 현지화 | 완료 |
 | M6 | Jenkins 병렬 파이프라인 · Appium 두 플랫폼 E2E · k6 부하·장애 · "JS 경유 vs C++ 직접" 비교 실험 | 완료 |
-| **M7** | Redis로 gateway 여러 대 · 이진 시세 프로토콜 · 주문 OTP · 자체 릴리스 도구 hoga-cli | **완료** |
+| M7 | Redis로 gateway 여러 대 · 이진 시세 프로토콜 · 주문 OTP · 자체 릴리스 도구 hoga-cli | 완료 |
+| **M8** | 계좌(잔고·미체결·정정·주문가능) · 장 운영 구간·동시호가·VI · 120종목 화면 구독 · 강제 업데이트·점검 · 비대면 계좌 개설 | **완료** |
+
+### M8 요약 — 증권 업무 흐름
+
+| 주제 | 한 일 | 확인한 것 |
+|---|---|---|
+| 계좌 · 정정 | 서버 모의 원장(예수금·보유·평균단가·실현손익). 매수 미체결은 "잔량 × 단가"를 묶고(시장가는 상한가), 매도 미체결은 매도가능수량에서 뺀다. 묶음은 주문 기록이 바뀔 때마다 잔량에 다시 맞춰 경우의 수를 줄였다. **주문가능 검증·최대 수량은 C++ 한 벌**(`checkAccount`·`maxOrderQty`)을 서버(N-API)와 앱(JSI)이 함께 쓴다. 정정은 원주문 잔량 일부를 C++ `reduce`(남은 수량은 시간 우선순위 유지)로 줄이고 새 가격으로 새 주문 — 새 멱등 키 + `amendOf`라 기존 "확인 중·재전송" 흐름을 그대로 탄다. 규칙 위반이면 원주문을 건드리기 전에 거부 | 앱: 주문 창 "매수 가능 704주 · 50,000,000원"·최대 버튼, 주문 후 694주로 줄어듦. 계좌 → 미체결 → 정정(71,000원 10주 중 4주를 71,100원으로) → 서버에 원주문 잔량 6·정정 4, 새 주문 4주 |
+| 장 운영 · 동시호가 · VI | C++ 엔진에 매매 방식(접속·단일가·거래 정지)과 **단일가 체결**(`indicative`: 체결량 최대 → 남는 수량 최소 → 기준가에 가까운 가격, `uncross`: 한 가격에 전부). 장 시작·마감 동시호가 → 장중·장 종료로 넘어갈 때 모인 주문을 한 가격에 체결. **VI 판정도 C++**(정적 10%·동적 3%, 발동 종목만 2분 단일가). 매매 상태는 `status` 메시지(장 구간·VI·예상 체결가)로, 구독 직후 스냅샷 다음에 한 번 + 바뀔 때만(예상 체결가는 최대 초당 5번). Redis·gateway 복제본까지 전달. 관리 콘솔에 구간 버튼·종목별 VI 발동/해제 | 앱 호가 화면: "장중 · 동적 VI · 114초 후 해제 · 예상 체결 71,000 · 2,190주", 겹친 호가가 그대로 보이고 해제되면 한 가격에 체결. 관심종목 줄에 VI 표시 |
+| 120종목 · 보이는 종목만 | 종목을 5 → 120개로(결정적 모의 이름·가격, 거래 빈도 차등). 앱은 **화면에 보이는 줄 ± 2줄만 구독**: 화면들이 참조 수로 잡고 놓기, 해제는 1.5초 미뤄 스크롤 왕복에 스냅샷을 다시 받지 않게, 변경은 120ms 모아 한 번에(연결당 초당 메시지 제한), 상한 36(서버 40) 넘으면 놓은 것부터 해제. 백그라운드 15초가 지나면 소켓을 닫고 돌아오면 다시 연결해 필요한 종목만 구독 | 관심종목 첫 화면 "실시간 13 · 전체 120", 스크롤하면 구독이 따라 바뀜(15) |
+| 강제 업데이트 · 점검 | `/app/config`(플랫폼·버전·언어) → 최소 버전 미만이면 업데이트 화면만, 최신 미만이면 닫을 수 있는 안내, 점검이면 점검 화면(종료 예정 시각·다시 확인). 시작·포그라운드 복귀·1분마다 읽고, **API가 503 MAINTENANCE를 받으면 즉시 다시 읽는다**. 서버도 점검 중 주문·계좌·로그인 API를 503으로 막아 앱이 늦게 알아도 안전. 버전은 hoga-cli로 0.8.0(9) | 0.7.0 앱에 "새 버전 0.8.0" 안내 → 0.8.0으로 올리자 사라짐. 관리 콘솔에서 점검을 켜고 계좌를 열자 앱 전체가 점검 화면 |
+| 비대면 계좌 개설 | 단계 화면은 **서버 웹(HTML/CSS/JS)** — 약관 → 본인 정보 → 휴대폰 인증(모의 코드) → 신분증 → 비밀번호 → 계좌 번호. 앱은 웹이 못 하는 일만: 신청서 토큰을 **보안 저장소**에(나갔다 와도 이어서), **신분증 촬영은 네이티브 모듈**(iOS **Swift** UIImagePickerController·PHPicker + Obj-C++ 연결부, Android **Kotlin** 카메라 앱·FileProvider·사진 선택기)로 줄이고 다시 인코딩(EXIF 위치 정보 제거)해 **앱이 직접 서버로** 올리고, 웹에는 결과만. 서버는 단계 순서 강제·가린 값만 응답·이미지는 형식만 확인 후 해시만 남김. 완료되면 새 계정 + 모의 입금 1,000만 원 | 시뮬레이터에서 처음부터 끝까지: 사진 선택기(권한 요청 없음) → 업로드 → "K\*\*\*a · 1990-\*\*-\*\* 확인되었습니다" → 계좌번호 5001-20-000101 → 로그인 화면에 새 아이디가 채워짐 |
+
+![VI 단일가 중 호가](docs/m8-ios-quote-vi-auction.png)
+
+화면: [관심종목(보이는 종목만 구독)](docs/m8-ios-watchlist-visible-subscribe.png) · [주문가능 수량](docs/m8-ios-order-orderable.png) · [계좌 잔고](docs/m8-ios-account-balance.png) · [정정 주문 창](docs/m8-ios-amend-sheet.png) · [점검 화면](docs/m8-ios-maintenance.png) · [계좌 개설: 신분증](docs/m8-ios-account-open-idcard.png) · [계좌 개설 완료](docs/m8-ios-account-open-done.png)
+
+### M8 검증 결과 (2026-11-16)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| C++ | 정정(잔량 축소·시간 우선 유지·초과 거부), 단일가(겹쳐도 쌓기·시장가 거부·예상 체결가 규칙·한 가격 체결), 장 종료 거부·취소 허용, 주문가능(시장가=상한가·매도가능·곱셈 넘침), VI(정적 우선·동적·기준가 0), 정규장 구간, MarketClient `status` 보관 (코어 92개, +15) | 일반 · ASan · TSan 통과 |
+| 서버 | 원장(묶음·해제·체결 반영·평균단가), 주문가능 거부, 정정(부분·전량·순서 위반 시 원주문 보존·남의 주문 거부), 동시호가 → 장 시작 단일가 체결 → 양쪽 계좌 반영, 장 종료, 동적 VI 발동·해제, 관리 VI, 서울 시각 구간, 강제 업데이트·점검 503, 계좌 개설 전 단계(순서 강제·미성년·중복 아이디·틀린 코드·JPEG 아님·완료 후 로그인), Redis 경유 `status` 전달, 120종목 결정성 (vitest 85개, +17) | 통과 |
+| 앱 | 구독 관리(참조 수·지연 해제·상한·재연결), 버전 비교, 계좌 개설 브리지 메시지 검사, 강제 업데이트·점검 화면, 계좌 → 미체결 → 정정 모드 (Jest 55개, +9) | 통과 |
+| Appium E2E | 기존 5개 + **동시호가 표시 → 미체결 정정**(서버로 원주문 확인) + **점검 화면 전환·복귀** | iOS 7/7 · Android 7/7 |
+| 시뮬레이터 수동 | 계좌 개설 전 과정(사진 선택기 → 업로드 → 완료 → 로그인 화면), 관심종목 구독 수, VI·예상 체결, 주문가능·정정, 점검 화면 | 위 화면들 |
+| Jenkins | 같은 파이프라인(Android lint 포함) | **#8 성공 3분 42초**, JUnit **447개 통과 · 실패 0** (C++ 92×3 · 서버 85 · 앱 55 · N-API 10 · hoga-cli 7 · E2E 7×2). 비교 실험·부하(BENCH·LOAD)는 이번에 다시 돌리지 않음 |
+
+### M8에서 찾은 것들
+
+- **종목을 120개로 늘리자 CI에서 서버 시험이 줄줄이 시간 초과**(#6). 시험 서버도 기본 120종목으로 떠서, 시작할 때 과거 봉을 24배 만들고 "느린 클라이언트" 시험의 `warmUp(1000)`이 120종목을 돌았다. 빌드와 겹친 CI에서 20초를 넘기고 정리까지 밀려 뒤 시험이 연달아 실패 → 서버 시험은 핵심 5종목으로 띄우고(`test/fixtures.ts`), 120종목 목록 자체는 따로 시험.
+- **늦게 채워지는 요약 카드가 탭을 밀었다.** Android E2E에서 계좌 화면의 "미체결" 탭을 눌렀는데 잔고 탭에 머물렀다: 잔고 요약이 도착하며 카드가 커지고 탭이 아래로 밀려, 그 사이의 탭이 엉뚱한 곳에 맞았다. 사람에게도 생기는 오동작이라 카드가 불러오는 동안에도 같은 높이를 차지하게 고쳤다.
+
+- **웹에서 내용 없는 POST가 400.** 계좌 개설 첫 요청이 `content-type: application/json`에 본문 없이 나가 Fastify가 거절했다(서버 시험은 `{}`를 보내 통과). 웹은 POST마다 `{}`라도 보내게 고쳤다.
+- **웹뷰가 옛 JS를 계속 썼다.** HTML은 `no-cache`지만 JS·CSS는 60초 캐시라, 고친 뒤에도 같은 오류가 났다(WKWebView 메모리 캐시는 앱을 다시 띄워야 비워짐). 계좌 개설 화면은 자원 주소에 버전(`?v=2`)을 붙였다. 웹을 자주 바꾸는 MTS라면 빌드 때 해시를 붙이는 게 맞다.
+- **VI 남은 시간이 처음 한 번 "0초"로 깜빡였다.** 시각을 상태로 들고 있다가 값이 바뀐 첫 렌더에 옛 값(0)을 그렸다 → 매 렌더 지금 시각으로 계산하고 1초마다 다시 그리기만.
+- **단일가 체결은 양쪽 모두 걸려 있던 주문이다.** 접속매매 체결 알림은 maker(걸려 있던 쪽)만 보면 됐지만, 단일가 체결은 매수·매도 모두 사용자 주문일 수 있어 둘 다 확인하게 바꿨다(서버 시험이 계좌 반영 누락을 잡음).
+- **종목을 120개로 늘리자 기존 시험 하나가 "5종목"을 가정**하고 있었다 → 시장 단위 시험은 핵심 5종목으로 고정.
 
 ### M7 요약
 
@@ -285,8 +322,9 @@ hoga/
 │  │  ├─ core.hpp                 # 호가단위 · 호가단위 맞춤 · 가격제한폭
 │  │  ├─ order_book.hpp           # L2 호가창 (단일 작성자 + 다중 읽기, shared_mutex)
 │  │  ├─ book_sync.hpp            # seq 기반 스냅샷 + 변경분 재동기화 상태 머신
-│  │  ├─ order.hpp                # 주문 검증 (앱·서버 공용 규칙)
-│  │  ├─ matching_engine.hpp      # 가격·시간 우선 매칭 엔진
+│  │  ├─ order.hpp                # 주문 검증 · 주문가능금액·매도가능수량 (앱·서버 공용 규칙)
+│  │  ├─ matching_engine.hpp      # 가격·시간 우선 매칭 엔진 · 정정(잔량 축소) · 단일가 체결
+│  │  ├─ session.hpp              # 정규장 구간 · VI 판정
 │  │  ├─ transport.hpp            # 플랫폼 네트워크·타이머 인터페이스
 │  │  ├─ market_client.hpp        # 시세 클라이언트 (재연결·구독·재동기화·봉)
 │  │  ├─ candles.hpp              # 1분 봉 + 읽을 때 집계
@@ -304,7 +342,10 @@ hoga/
 │                                 # HogaChartComponentView.mm: Fabric 차트 (CoreGraphics)
 ├─ shared/                        # 앱·웹 공용: i18n/(ko·en·id·th) · analytics/events.json
 ├─ server/                        # Node.js 모의 거래소 (TypeScript, Fastify, ws)
-│  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기
+│  ├─ src/market/                 # 시세 단일 작성자 + 모의 주문 발생기 · session.ts(장 구간·VI)
+│  ├─ src/account/ledger.ts       # 모의 계좌 원장(예수금·보유·미체결 묶음)
+│  ├─ src/api/appConfig.ts        # 강제 업데이트·점검(503)
+│  ├─ src/api/accountOpen.ts      # 비대면 계좌 개설(단계 강제·가린 값)
 │  ├─ src/gateway/                # WebSocket 팬아웃 (백프레셔·하트비트·제한)
 │  ├─ src/api/                    # REST: 인증 · 주문 (멱등 키)
 │  ├─ src/auth/                   # HS256 JWT · 사용자 · 리프레시 회전
@@ -317,12 +358,14 @@ hoga/
 │  ├─ src/auth/totp.ts, otp.ts    # RFC 6238 TOTP · 주문 step-up
 │  ├─ src/api/web.ts              # 웹 화면 정적 제공 · CSP · 번역 · 종목정보 · 공지
 │  ├─ src/api/admin.ts            # 관리 API(장애 주입 · 변동성 · 연결 끊기)
-│  ├─ web/                        # 종목정보(HTML/CSS/JS) · 공지(AngularJS) · 공용 브리지·번역·분석 JS
+│  ├─ web/                        # 종목정보(HTML/CSS/JS) · 공지(AngularJS) · 계좌 개설(HTML/JS) · 공용 브리지·번역·분석 JS
 │  ├─ admin/                      # AngularJS 관리 콘솔
 │  └─ test/
 ├─ apps/mobile/                   # React Native 0.88 앱
 │  ├─ specs/                      # 코드젠 스펙 (TurboModule · HogaChartView)
-│  ├─ src/screens/                # 관심종목 · 실시간 호가 · 차트 탭
+│  ├─ src/screens/                # 관심종목 · 실시간 호가 · 차트 탭 · 계좌(잔고·미체결) · 계좌 개설
+│  ├─ src/market/subscriptions.ts # 보이는 종목만 구독 · 백그라운드 연결 관리
+│  ├─ src/appgate/                # 강제 업데이트 · 점검 화면
 │  ├─ src/components/ChartPanel.tsx
 │  ├─ src/web/                    # 웹뷰 브리지(검사 규칙) · HogaWebView
 │  ├─ src/i18n/                   # 번역 · 숫자 형식 · 서버 번역 갱신
@@ -332,10 +375,12 @@ hoga/
 │  ├─ src/orders/                 # 주문 상태 머신 · 미확정 주문 기록 · 내 주문
 │  ├─ src/auth/session.ts         # 로그인 · 토큰 회전 · 생체 잠금
 │  ├─ android/.../transport/HogaTransport.kt
+│  ├─ ios/HogaApp/DocumentCapture.swift  # 신분증 촬영(Swift) + HogaDocumentCapture.mm(TurboModule 연결부)
+│  ├─ android/.../capture/        # Kotlin DocumentCaptureModule(카메라 앱·FileProvider·사진 선택기)
 │  ├─ android/.../security/       # Kotlin SecureStoreModule · Java DeviceGuardModule
 │  └─ android/.../chart/          # Kotlin HogaChartView (Canvas) · ViewManager · JNI 선언
 ├─ e2e/                           # Appium 3 + WebdriverIO: 테스트 한 벌로 iOS·Android
-│  ├─ specs/flows.e2e.ts          # 주문 · 응답 지연 · seq 누락 · 웹뷰 → 네이티브 주문
+│  ├─ specs/flows.e2e.ts          # 주문 · 응답 지연 · seq 누락 · 웹뷰 → 네이티브 주문 · OTP · 동시호가·정정 · 점검
 │  └─ specs/bench.e2e.ts          # "JS 경유 vs C++ 직접" 측정 자동화
 ├─ loadtest/                      # k6: 주문 멱등성 · 시세 팬아웃 · 연결 끊기 복구, results/
 ├─ ci/                            # 단계별 스크립트(Jenkins·터미널 공용) · jenkins/(로컬 Jenkins 설정)
@@ -463,6 +508,16 @@ ci/jenkins/build.sh E2E=true BENCH=false LOAD=true
 - E2E는 플랫폼마다 서버를 따로 씁니다(iOS 8080, Android 8091을 `adb reverse tcp:8080 tcp:8091`). 장애 주입이 다른 플랫폼 시험에 섞이지 않게 하기 위해서입니다.
 - Android 17 에뮬레이터는 Metro 기본 주소(10.0.2.2)에 로컬 네트워크 권한이 필요해, 스크립트가 디버그 앱의 Metro 주소를 `localhost:8081`로 바꿉니다.
 
+### 장 운영 · 점검 시연 (M8)
+
+```bash
+# 관리 콘솔(http://localhost:8080/admin/)의 "장 운영 구간"·"앱 배포 · 점검"·종목별 VI 버튼, 또는 API로
+curl -X PUT localhost:8080/admin/api/session -H 'x-admin-token: hoga-admin-dev-token' -H 'content-type: application/json' -d '{"phase":"PRE_OPEN"}'
+curl -X POST localhost:8080/admin/api/vi -H 'x-admin-token: hoga-admin-dev-token' -H 'content-type: application/json' -d '{"symbol":"000001","action":"trigger"}'
+# 서울 시각 정규장 일정(평일 08:30~15:30)을 따르려면
+SESSION_CLOCK=krx npm start --prefix server
+```
+
 ### 클러스터 · 릴리스 (M7)
 
 ```bash
@@ -547,4 +602,9 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 현지화: 종목 이름은 번역하지 않습니다. 오른쪽에서 왼쪽으로 쓰는 언어(ar)는 아직 대상이 아닙니다. 번역 검수는 원어민 확인을 거치지 않았습니다.
 - 현지화: 가격은 원화·한국 호가단위 그대로이고 자릿수 구분만 언어를 따릅니다. 시장별 호가 정책(루피아·바트)은 C++ 인터페이스로 분리하지 않았습니다.
 - Android 하드웨어 뒤로 가기(`BackHandler`)를 처리하지 않습니다. 화면 안의 ‹ 버튼으로만 이동하고, 웹뷰 안 기록(공지 상세 → 목록)도 웹 화면의 ‹ 버튼으로 돌아갑니다.
-- 계획한 M0~M7을 마쳤습니다. 남은 후보: FCM 푸시(Firebase 계정 필요), Sentry, market 이중화, 실기기 측정.
+- 계좌 원장은 market 메모리라 재시작하면 처음 값으로 돌아갑니다. 수수료·세금·결제일(T+2)·신용·미수는 계산하지 않습니다.
+- 정정은 지정가만, 취소는 전량만 됩니다. 실제 거래소처럼 정정 주문이 원주문 번호를 잇는 "정정 확인" 체계는 흉내만 냈습니다(새 주문 + `amendOf`).
+- 동시호가·VI는 단순화했습니다: 단일가 중 시장가는 받지 않고, VI는 주문 처리가 끝난 뒤 판정합니다(실제는 처리 도중 멈춤). 장 마감 뒤 시간외 매매, 공휴일, 랜덤 엔드(마감 직전 무작위 연장)는 없습니다.
+- 강제 업데이트의 스토어 주소는 모의 값이고, 점검 중에도 시세(WebSocket)는 막지 않습니다.
+- 비대면 계좌 개설은 모의입니다: 휴대폰 인증 코드는 실제로 보내지 않고 화면에 보여 주며, 신분증은 JPEG 형식만 확인합니다(진위 확인·OCR·얼굴 대조·기존 계좌 1원 인증 없음). 신청서는 30분 동안 메모리에만 있습니다. 시뮬레이터에는 카메라가 없어 **카메라 촬영 경로는 실기기에서 확인해야 합니다**(사진 선택 경로만 확인).
+- 계획한 M0~M8을 마쳤습니다. 남은 후보: FCM 푸시(Firebase 계정 필요), Sentry, market 이중화, 실기기 측정.

@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 import { Redis } from 'ioredis';
 
 import { createGatewayServer, createServer, type GatewayServer, type HogaServer } from '../src/app.js';
+import { TEST_OPTIONS } from './fixtures.js';
 import { loadConfig } from '../src/config.js';
 import type { ServerMessage } from '../src/protocol.js';
 import { RedisRefreshStore } from '../src/redis/refreshStore.js';
@@ -45,7 +46,7 @@ afterEach(async () => {
 const base = { HOST: '127.0.0.1', LOG_LEVEL: 'silent', REDIS_URL, SIM_INTERVAL_MS: '0' } as const;
 
 async function market(env: Record<string, string> = {}): Promise<HogaServer> {
-  const server = createServer(loadConfig({ ...base, PORT: '0', ROLE: 'market', ...env }));
+  const server = createServer(loadConfig({ ...base, PORT: '0', ROLE: 'market', ...env }), TEST_OPTIONS);
   await server.start();
   running.push(server);
   return server;
@@ -178,6 +179,26 @@ describe.skipIf(!hasRedis)('cluster: market + gateways over Redis', () => {
     expect(results.map((r) => r.state).sort()).toEqual(['ok', 'reused', 'reused']);
     expect(await store.consume('nope')).toEqual({ state: 'missing' });
     redis.disconnect();
+  });
+
+  it('sends market status after the snapshot and relays phase changes through Redis', async () => {
+    const m = await market();
+    const gw = await gatewayFor(m, 'gw-a');
+    const c = await client(gw.url());
+    c.send({ op: 'sub', symbols: ['000002'] });
+    await c.until(() => c.messages.some((x) => x.t === 'status' && x.phase === 'OPEN'));
+    const firstStatus = c.messages.findIndex((x) => x.t === 'status');
+    expect(c.messages.findIndex((x) => x.t === 'snap')).toBeLessThan(firstStatus);
+    await fetch(`${m.url()}/admin/api/session`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-admin-token': 'hoga-admin-dev-token' },
+      body: JSON.stringify({ phase: 'PRE_OPEN' }),
+    });
+    await c.until(() => c.messages.some((x) => x.t === 'status' && x.phase === 'PRE_OPEN' && x.mode === 'AUCTION'));
+    // 나중에 붙은 클라이언트도 복제본의 최신 상태를 받는다
+    const late = await client(gw.url());
+    late.send({ op: 'sub', symbols: ['000002'] });
+    await late.until(() => late.messages.some((x) => x.t === 'status' && x.phase === 'PRE_OPEN'));
   });
 
   it('rejects ROLE=market/gateway without Redis', () => {

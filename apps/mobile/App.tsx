@@ -10,14 +10,18 @@ import {ActivityIndicator, StatusBar, StyleSheet, Text, View} from 'react-native
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 
 import {track} from './src/analytics/analytics';
+import {AppGate} from './src/appgate/AppGate';
 import {fetchSymbols, type SymbolInfo} from './src/api/symbols';
 import {session, useSession} from './src/auth/session';
 import {SECURE_SCREEN, SERVER} from './src/config';
 import {refreshFromServer, t, useI18n} from './src/i18n';
 import {loadSavedLocale} from './src/i18n/persist';
+import {startMarketLifecycle} from './src/market/subscriptions';
 import {hogaCore, type OrderEvent} from './src/native/hogaCore';
 import {deviceGuard} from './src/native/security';
 import {orderService} from './src/orders/orderService';
+import {AccountOpenScreen} from './src/screens/AccountOpenScreen';
+import {AccountScreen} from './src/screens/AccountScreen';
 import {BenchScreen} from './src/screens/BenchScreen';
 import {LoginScreen} from './src/screens/LoginScreen';
 import {NoticesScreen} from './src/screens/NoticesScreen';
@@ -67,7 +71,13 @@ function useBanner() {
   return {text, show};
 }
 
-type Route = {name: 'watchlist'} | {name: 'quote'; symbol: SymbolInfo} | {name: 'notices'} | {name: 'settings'} | {name: 'bench'};
+type Route =
+  | {name: 'watchlist'}
+  | {name: 'quote'; symbol: SymbolInfo; from?: 'account'}
+  | {name: 'account'}
+  | {name: 'notices'}
+  | {name: 'settings'}
+  | {name: 'bench'};
 
 function Main({userName}: {userName: string}) {
   useI18n(); // 언어가 바뀌면 다시 그린다
@@ -80,9 +90,7 @@ function Main({userName}: {userName: string}) {
     track('screen_view', {screen_name: route.name});
   }, [route.name]);
 
-  useEffect(() => {
-    if (symbols.length) hogaCore.subscribe(symbols.map(s => s.code));
-  }, [symbols]);
+  // 시세 구독은 화면이 필요한 종목만(관심종목의 보이는 줄, 호가 화면, 주문 창) — src/market/subscriptions.ts
 
   // 로그인 직후: 지난번에 확정하지 못한 주문을 서버 조회로 정리
   useEffect(() => {
@@ -119,7 +127,13 @@ function Main({userName}: {userName: string}) {
   return (
     <View style={styles.container}>
       {route.name === 'quote' ? (
-        <QuoteScreen symbol={route.symbol} onBack={home} />
+        <QuoteScreen symbol={route.symbol} onBack={route.from === 'account' ? () => setRoute({name: 'account'}) : home} />
+      ) : route.name === 'account' ? (
+        <AccountScreen
+          symbols={symbols}
+          onBack={home}
+          onSelectSymbol={symbol => setRoute({name: 'quote', symbol, from: 'account'})}
+        />
       ) : route.name === 'notices' ? (
         <NoticesScreen onBack={home} />
       ) : route.name === 'settings' ? (
@@ -137,6 +151,7 @@ function Main({userName}: {userName: string}) {
           }}
           onOpenNotices={() => setRoute({name: 'notices'})}
           onOpenSettings={() => setRoute({name: 'settings'})}
+          onOpenAccount={() => setRoute({name: 'account'})}
         />
       )}
       {banner.text ? (
@@ -150,30 +165,47 @@ function Main({userName}: {userName: string}) {
 
 function App(): React.JSX.Element {
   const state = useSession();
+  // 로그아웃 상태에서만: 비대면 계좌 개설 화면, 개설 후 로그인 화면에 채울 아이디
+  const [opening, setOpening] = useState(false);
+  const [newUsername, setNewUsername] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    // 시세는 로그인과 무관하게 연결, 로그인하면 세션이 토큰을 넘겨 주문 알림까지 받는다
-    hogaCore.connect(SERVER.ws, SERVER.http);
+    // 시세는 로그인과 무관하게 연결, 로그인하면 세션이 토큰을 넘겨 주문 알림까지 받는다.
+    // 백그라운드가 길어지면 끊고 돌아오면 다시 연결(src/market/subscriptions.ts)
+    const stopMarket = startMarketLifecycle(
+      () => hogaCore.connect(SERVER.ws, SERVER.http),
+      () => hogaCore.disconnect(),
+    );
     deviceGuard.setSecureScreen(SECURE_SCREEN); // 잔고·주문 화면이 캡처·앱 전환기에 남지 않게
     // 저장된 언어 → 서버 번역 갱신(실패해도 내장 번역으로 계속)
     loadSavedLocale().finally(() => refreshFromServer(SERVER.http));
     session.restore();
-    return () => hogaCore.disconnect();
+    return stopMarket;
   }, []);
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-        {state.status === 'loading' ? (
-          <View style={styles.center}>
-            <ActivityIndicator />
-          </View>
-        ) : state.status === 'signedIn' ? (
-          <Main userName={state.user.name} />
-        ) : (
-          <LoginScreen state={state} />
-        )}
+        <AppGate>
+          {state.status === 'loading' ? (
+            <View style={styles.center}>
+              <ActivityIndicator />
+            </View>
+          ) : state.status === 'signedIn' ? (
+            <Main userName={state.user.name} />
+          ) : opening ? (
+            <AccountOpenScreen
+              onClose={() => setOpening(false)}
+              onOpened={username => {
+                setNewUsername(username);
+                setOpening(false);
+              }}
+            />
+          ) : (
+            <LoginScreen state={state} initialUsername={newUsername} onOpenAccount={() => setOpening(true)} />
+          )}
+        </AppGate>
       </SafeAreaView>
     </SafeAreaProvider>
   );

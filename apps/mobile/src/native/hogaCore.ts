@@ -9,6 +9,19 @@ export type Level = [number, number];
 export type SyncState = 'waiting' | 'live' | 'resyncing';
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'stopped';
 
+/** 서버 status: 장 구간·매매 방식·VI·단일가 예상 체결(C++ MarketClient가 보관). phase가 ''이면 아직 모름 */
+export interface SessionView {
+  phase: '' | 'PRE_OPEN' | 'OPEN' | 'CLOSING' | 'CLOSED';
+  mode: '' | 'CONTINUOUS' | 'AUCTION' | 'HALTED';
+  viKind: '' | 'STATIC' | 'DYNAMIC';
+  viUntil: number;
+  viRef: number;
+  expPrice: number;
+  expQty: number;
+}
+
+export const EMPTY_SESSION: SessionView = {phase: '', mode: '', viKind: '', viUntil: 0, viRef: 0, expPrice: 0, expQty: 0};
+
 export interface BookView {
   subscribed: boolean;
   seq: number;
@@ -18,6 +31,7 @@ export interface BookView {
   /** 매도: 낮은 가격부터 */
   asks: Level[];
   lastUpdateMs: number;
+  session: SessionView;
 }
 
 export interface Trade {
@@ -38,7 +52,15 @@ export interface ClientStats {
   lastError: string;
 }
 
-const EMPTY_BOOK: BookView = {subscribed: false, seq: 0, sync: 'waiting', bids: [], asks: [], lastUpdateMs: 0};
+const EMPTY_BOOK: BookView = {
+  subscribed: false,
+  seq: 0,
+  sync: 'waiting',
+  bids: [],
+  asks: [],
+  lastUpdateMs: 0,
+  session: EMPTY_SESSION,
+};
 
 export const hogaCore = {
   coreVersion: () => NativeHogaCore.coreVersion(),
@@ -48,6 +70,15 @@ export const hogaCore = {
   /** 'NONE'이면 통과. 서버와 같은 C++ 규칙 */
   validateOrder: (side: 'bid' | 'ask', type: 'limit' | 'market', price: number, qty: number, basePrice: number) =>
     NativeHogaCore.validateOrder(side, type, price, qty, basePrice),
+  /** 서버가 준 한도로 계좌 검증(같은 C++ checkAccount). 'NONE'이면 통과 */
+  checkAccount: (
+    side: 'bid' | 'ask',
+    type: 'limit' | 'market',
+    price: number,
+    qty: number,
+    limits: {availableCash: number; sellableQty: number},
+    upperLimit: number,
+  ) => NativeHogaCore.checkAccount(side, type, price, qty, limits.availableCash, limits.sellableQty, upperLimit),
   randomId: () => NativeHogaCore.randomId(),
   setAuthToken: (token: string) => NativeHogaCore.setAuthToken(token),
 
@@ -58,7 +89,8 @@ export const hogaCore = {
 
   getBook(symbol: string, depth: number): BookView {
     const raw = NativeHogaCore.getBook(symbol, depth) as Partial<BookView>;
-    return raw.subscribed ? (raw as BookView) : EMPTY_BOOK;
+    if (!raw.subscribed) return EMPTY_BOOK;
+    return {...(raw as BookView), session: raw.session ?? EMPTY_SESSION};
   },
   getTrades: (symbol: string, limit: number) => NativeHogaCore.getTrades(symbol, limit) as unknown as Trade[],
   getStats: () => NativeHogaCore.getStats() as unknown as ClientStats,
@@ -91,6 +123,8 @@ export interface OrderEvent {
   status: 'NEW' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'REJECTED';
   filled: number;
   resting: number;
+  amendOf?: string;
+  amended?: number;
   fill?: {price: number; qty: number};
   ts: number;
 }

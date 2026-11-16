@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createServer, type HogaServer } from '../src/app.js';
+import { TEST_OPTIONS } from './fixtures.js';
 import { InMemoryOtpStore, OtpService } from '../src/auth/otp.js';
 import { base32Decode, base32Encode, codeAt, stepAt, verifyCode } from '../src/auth/totp.js';
 import { loadConfig } from '../src/config.js';
@@ -93,7 +94,7 @@ afterEach(async () => {
 
 describe('orders with OTP', () => {
   it('requires a step-up token; the same idempotency key works after OTP', async () => {
-    const server = createServer(loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0' }));
+    const server = createServer(loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0' }), TEST_OPTIONS);
     await server.start();
     servers.push(server);
     const call = async (path: string, body: unknown, headers: Record<string, string> = {}) => {

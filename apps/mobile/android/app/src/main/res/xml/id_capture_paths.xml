@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 신분증 촬영 임시 파일(앱 캐시). 카메라 앱에 이 폴더만 넘긴다 -->
+<paths>
+  <cache-path name="idcard" path="idcard/" />
+</paths>

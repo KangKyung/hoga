@@ -78,6 +78,15 @@
           volatility: function (body) {
             return $http.put('/admin/api/volatility', body).then(data);
           },
+          session: function (phase) {
+            return $http.put('/admin/api/session', { phase: phase }).then(data);
+          },
+          vi: function (symbol, action) {
+            return $http.post('/admin/api/vi', { symbol: symbol, action: action }).then(data);
+          },
+          appConfig: function (body) {
+            return $http.put('/admin/api/app-config', body).then(data);
+          },
           disconnect: function () {
             return $http.post('/admin/api/disconnect', {}).then(data);
           },
@@ -138,6 +147,14 @@
             vm.state = state;
             vm.connected = true;
             vm.error = null;
+            if (!vm.appDirty && state.appConfig) {
+              vm.appForm = {
+                minVersion: state.appConfig.minVersion,
+                latestVersion: state.appConfig.latestVersion,
+                maintenance: state.appConfig.maintenance.active,
+                minutes: vm.appForm ? vm.appForm.minutes : 30,
+              };
+            }
             if (!vm.dirty) {
               vm.form = {
                 dropSeqRate: state.faults.dropSeqRate,
@@ -231,6 +248,65 @@
             .then(function (r) {
               vm.lastAction = '연결 ' + r.closed + '개를 끊었습니다';
             }, fail('끊지 못했습니다'))
+            .finally(function () {
+              vm.busy = false;
+            });
+        };
+
+        vm.symbolLimit = 10;
+        vm.phases = [
+          { code: 'PRE_OPEN', label: '장 시작 동시호가' },
+          { code: 'OPEN', label: '장중' },
+          { code: 'CLOSING', label: '장 마감 동시호가' },
+          { code: 'CLOSED', label: '장 종료' },
+        ];
+        vm.phaseLabel = function (code) {
+          var found = vm.phases.filter(function (p) {
+            return p.code === code;
+          })[0];
+          return found ? found.label : '-';
+        };
+        vm.secondsLeft = function (until) {
+          return Math.max(0, Math.round((until - Date.now()) / 1000));
+        };
+        vm.viOf = function (code) {
+          var list = (vm.state && vm.state.session && vm.state.session.vi) || [];
+          return list.some(function (v) {
+            return v.symbol === code;
+          });
+        };
+        vm.setPhase = function (phase) {
+          vm.busy = true;
+          adminApi
+            .session(phase)
+            .then(function () {
+              vm.lastAction = '장 구간: ' + vm.phaseLabel(phase);
+            }, fail('장 구간을 바꾸지 못했습니다'))
+            .finally(function () {
+              vm.busy = false;
+            });
+        };
+        vm.vi = function (s, action) {
+          adminApi.vi(s.code, action).then(function () {
+            vm.lastAction = s.name + ' VI ' + (action === 'trigger' ? '발동' : '해제');
+          }, fail('VI를 바꾸지 못했습니다'));
+        };
+        vm.applyAppConfig = function () {
+          var f = vm.appForm;
+          vm.busy = true;
+          adminApi
+            .appConfig({
+              minVersion: f.minVersion,
+              latestVersion: f.latestVersion,
+              maintenance: {
+                active: Boolean(f.maintenance),
+                until: f.maintenance ? Date.now() + Number(f.minutes || 30) * 60000 : null,
+              },
+            })
+            .then(function () {
+              vm.appDirty = false;
+              vm.lastAction = '앱 설정 적용';
+            }, fail('앱 설정을 바꾸지 못했습니다'))
             .finally(function () {
               vm.busy = false;
             });

@@ -22,6 +22,16 @@ export interface Spec extends TurboModule {
   readonly priceLimits: (basePrice: number) => CodegenTypes.UnsafeObject;
   /** 서버와 같은 C++ 규칙으로 주문 검증. 'NONE'이면 통과, 아니면 'OFF_TICK' 같은 거부 사유 */
   readonly validateOrder: (side: string, type: string, price: number, qty: number, basePrice: number) => string;
+  /** 서버가 준 한도(주문가능금액·매도가능수량)로 C++ 계좌 검증. 'NONE' | 'INSUFFICIENT_CASH' | 'INSUFFICIENT_QTY' | ... */
+  readonly checkAccount: (
+    side: string,
+    type: string,
+    price: number,
+    qty: number,
+    availableCash: number,
+    sellableQty: number,
+    upperLimit: number,
+  ) => string;
   /** 주문 멱등 키용 UUID v4 (C++ std::random_device) */
   readonly randomId: () => string;
 

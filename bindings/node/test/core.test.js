@@ -80,3 +80,29 @@ test('CandleSeries: 체결을 1분 봉으로, 5분 봉은 읽을 때 묶는다',
   assert.ok(s.version >= 3);
   assert.throws(() => s.addTrade(0, 1.5, 1), TypeError);
 });
+
+test('account limits: market buy reserves the upper limit, sell limited by holdings', () => {
+  const limits = { availableCash: 1_000_000, sellableQty: 30 };
+  assert.equal(core.checkAccount({ side: 'bid', type: 'market', qty: 77 }, limits, 13_000), 'INSUFFICIENT_CASH');
+  assert.equal(core.checkAccount({ side: 'ask', type: 'limit', price: 10_000, qty: 30 }, limits, 13_000), 'NONE');
+  assert.equal(core.maxOrderQty({ side: 'bid', type: 'limit', price: 10_000 }, limits, 13_000), 100);
+  assert.equal(core.maxOrderQty({ side: 'ask' }, limits, 13_000, 20), 20);
+});
+
+test('auction: crossing orders wait, uncross trades at one price; reduce keeps priority', () => {
+  const engine = new core.MatchingEngine({ basePrice: 10_000 });
+  engine.mode = 'AUCTION';
+  const bid = engine.submit({ side: 'bid', price: 10_100, qty: 5 });
+  engine.submit({ side: 'ask', price: 9_900, qty: 8 });
+  assert.equal(bid.fills.length, 0);
+  assert.deepEqual(engine.indicative(10_050), { price: 10_100, qty: 5 });
+  const result = engine.uncross(10_000);
+  assert.equal(result.filled, 5);
+  assert.equal(engine.mode, 'AUCTION');
+  engine.mode = 'CONTINUOUS';
+  const reduced = engine.reduce(2, 1);
+  assert.equal(reduced.resting, 2);
+  assert.throws(() => (engine.mode = 'NOPE'), TypeError);
+  assert.equal(core.checkVi(10_000, 10_000, 10_300), 'DYNAMIC');
+  assert.equal(core.phaseAt(9 * 60), 'OPEN');
+});

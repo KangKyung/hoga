@@ -9,6 +9,7 @@
 #include "hoga/core.hpp"
 #include "hoga/matching_engine.hpp"
 #include "hoga/order.hpp"
+#include "hoga/session.hpp"
 
 namespace {
 
@@ -181,6 +182,10 @@ class MatchingEngineWrap : public Napi::ObjectWrap<MatchingEngineWrap> {
                            InstanceMethod<&MatchingEngineWrap::Submit>("submit"),
                            InstanceMethod<&MatchingEngineWrap::Cancel>("cancel"),
                            InstanceMethod<&MatchingEngineWrap::Depth>("depth"),
+                           InstanceMethod<&MatchingEngineWrap::Reduce>("reduce"),
+                           InstanceMethod<&MatchingEngineWrap::Indicative>("indicative"),
+                           InstanceMethod<&MatchingEngineWrap::Uncross>("uncross"),
+                           InstanceAccessor<&MatchingEngineWrap::Mode, &MatchingEngineWrap::SetMode>("mode"),
                            InstanceAccessor<&MatchingEngineWrap::LastPrice>("lastPrice"),
                            InstanceAccessor<&MatchingEngineWrap::RestingOrderCount>("restingOrderCount"),
                        });
@@ -226,6 +231,49 @@ class MatchingEngineWrap : public Napi::ObjectWrap<MatchingEngineWrap> {
     const auto levels = info[1].IsUndefined() ? 10 : requireSafeInt(env, info[1], "levels");
     if (env.IsExceptionPending()) return env.Undefined();
     return levelsToJs(env, engine_->depth(*side, static_cast<std::size_t>(levels < 0 ? 0 : levels)));
+  }
+
+  Napi::Value Reduce(const Napi::CallbackInfo& info) {
+    const auto env = info.Env();
+    const auto id = requireSafeInt(env, info[0], "id");
+    const auto qty = requireSafeInt(env, info[1], "qty");
+    if (env.IsExceptionPending()) return env.Undefined();
+    return resultToJs(env, engine_->reduce(id <= 0 ? 0 : static_cast<hoga::OrderId>(id), qty));
+  }
+
+  Napi::Value Indicative(const Napi::CallbackInfo& info) {
+    const auto env = info.Env();
+    const auto ref = requireSafeInt(env, info[0], "reference");
+    if (env.IsExceptionPending()) return env.Undefined();
+    const auto ind = engine_->indicative(ref);
+    auto o = Napi::Object::New(env);
+    o.Set("price", num(env, ind.price));
+    o.Set("qty", num(env, ind.qty));
+    return o;
+  }
+
+  Napi::Value Uncross(const Napi::CallbackInfo& info) {
+    const auto env = info.Env();
+    const auto ref = requireSafeInt(env, info[0], "reference");
+    if (env.IsExceptionPending()) return env.Undefined();
+    return resultToJs(env, engine_->uncross(ref));
+  }
+
+  Napi::Value Mode(const Napi::CallbackInfo& info) {
+    return Napi::String::New(info.Env(), std::string(hoga::toString(engine_->mode())));
+  }
+
+  void SetMode(const Napi::CallbackInfo& info, const Napi::Value& value) {
+    const auto m = value.IsString() ? value.As<Napi::String>().Utf8Value() : "";
+    if (m == "CONTINUOUS") {
+      engine_->setMode(hoga::TradingMode::Continuous);
+    } else if (m == "AUCTION") {
+      engine_->setMode(hoga::TradingMode::Auction);
+    } else if (m == "HALTED") {
+      engine_->setMode(hoga::TradingMode::Halted);
+    } else {
+      Napi::TypeError::New(info.Env(), "mode must be CONTINUOUS | AUCTION | HALTED").ThrowAsJavaScriptException();
+    }
   }
 
   Napi::Value LastPrice(const Napi::CallbackInfo& info) {
@@ -306,7 +354,81 @@ class CandleSeriesWrap : public Napi::ObjectWrap<CandleSeriesWrap> {
   std::optional<hoga::CandleSeries> series_;
 };
 
+// ---------- 계좌 검증 · VI ----------
+
+// checkAccount(order, { availableCash, sellableQty }, upperLimit) → 'NONE' | 'INSUFFICIENT_CASH' | ...
+Napi::Value CheckAccount(const Napi::CallbackInfo& info) {
+  const auto env = info.Env();
+  const auto order = parseOrder(env, info[0]);
+  if (!order) return env.Undefined();
+  if (!info[1].IsObject()) {
+    Napi::TypeError::New(env, "limits { availableCash, sellableQty } required").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  const auto l = info[1].As<Napi::Object>();
+  const hoga::AccountLimits limits{requireSafeInt(env, l.Get("availableCash"), "availableCash"),
+                                   requireSafeInt(env, l.Get("sellableQty"), "sellableQty")};
+  const auto upper = requireSafeInt(env, info[2], "upperLimit");
+  if (env.IsExceptionPending()) return env.Undefined();
+  return Napi::String::New(env, std::string(hoga::toString(hoga::checkAccount(*order, limits, upper))));
+}
+
+// maxOrderQty(order(qty 무시), limits, upperLimit, maxQty) → 정수
+Napi::Value MaxOrderQty(const Napi::CallbackInfo& info) {
+  const auto env = info.Env();
+  if (!info[0].IsObject() || !info[1].IsObject()) {
+    Napi::TypeError::New(env, "order and limits required").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  auto o = info[0].As<Napi::Object>();
+  const auto side = parseSide(o.Get("side"));
+  const auto typeValue = o.Get("type");
+  const bool isMarket = typeValue.IsString() && typeValue.As<Napi::String>().Utf8Value() == "market";
+  const auto priceValue = o.Get("price");
+  const auto price = priceValue.IsUndefined() ? 0 : requireSafeInt(env, priceValue, "price");
+  const auto l = info[1].As<Napi::Object>();
+  const hoga::AccountLimits limits{requireSafeInt(env, l.Get("availableCash"), "availableCash"),
+                                   requireSafeInt(env, l.Get("sellableQty"), "sellableQty")};
+  const auto upper = requireSafeInt(env, info[2], "upperLimit");
+  const auto maxQty = info[3].IsUndefined() ? 1'000'000 : requireSafeInt(env, info[3], "maxQty");
+  if (env.IsExceptionPending()) return env.Undefined();
+  if (!side) {
+    Napi::TypeError::New(env, "side must be 'bid' or 'ask'").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  return num(env, hoga::maxOrderQty(*side, isMarket ? hoga::OrderType::Market : hoga::OrderType::Limit, price, limits,
+                                    upper, maxQty));
+}
+
+// checkVi(staticRef, dynamicRef, price, { staticBps?, dynamicBps? }) → 'NONE' | 'STATIC' | 'DYNAMIC'
+Napi::Value CheckVi(const Napi::CallbackInfo& info) {
+  const auto env = info.Env();
+  const auto staticRef = requireSafeInt(env, info[0], "staticRef");
+  const auto dynamicRef = requireSafeInt(env, info[1], "dynamicRef");
+  const auto price = requireSafeInt(env, info[2], "price");
+  hoga::ViPolicy policy;
+  if (info[3].IsObject()) {
+    const auto p = info[3].As<Napi::Object>();
+    if (p.Has("staticBps")) policy.staticBps = static_cast<int>(requireSafeInt(env, p.Get("staticBps"), "staticBps"));
+    if (p.Has("dynamicBps")) policy.dynamicBps = static_cast<int>(requireSafeInt(env, p.Get("dynamicBps"), "dynamicBps"));
+  }
+  if (env.IsExceptionPending()) return env.Undefined();
+  return Napi::String::New(env, std::string(hoga::toString(hoga::checkVi(staticRef, dynamicRef, price, policy))));
+}
+
+// phaseAt(minuteOfDayKst) → 'PRE_OPEN' | 'OPEN' | 'CLOSING' | 'CLOSED'
+Napi::Value PhaseAt(const Napi::CallbackInfo& info) {
+  const auto env = info.Env();
+  const auto minute = requireSafeInt(env, info[0], "minute");
+  if (env.IsExceptionPending()) return env.Undefined();
+  return Napi::String::New(env, std::string(hoga::toString(hoga::phaseAt(static_cast<int>(minute)))));
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  exports.Set("checkAccount", Napi::Function::New(env, CheckAccount));
+  exports.Set("maxOrderQty", Napi::Function::New(env, MaxOrderQty));
+  exports.Set("checkVi", Napi::Function::New(env, CheckVi));
+  exports.Set("phaseAt", Napi::Function::New(env, PhaseAt));
   exports.Set("coreVersion", Napi::Function::New(env, CoreVersion));
   exports.Set("tickSize", Napi::Function::New(env, TickSize));
   exports.Set("roundToTick", Napi::Function::New(env, RoundToTick));

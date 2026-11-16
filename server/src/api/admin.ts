@@ -6,6 +6,8 @@ import { z } from 'zod';
 import type { OtpService } from '../auth/otp.js';
 import type { GatewayControl } from '../cluster.js';
 import type { Market } from '../market/market.js';
+import type { MarketSession } from '../market/session.js';
+import { appConfigUpdate, type AppConfigStore } from './appConfig.js';
 import type { Metrics } from '../metrics.js';
 
 /** 관리 콘솔이 바꿀 수 있는 장애 주입 값 */
@@ -22,6 +24,8 @@ export interface AdminDeps {
   faults: FaultState;
   /** 고객센터 기능: OTP 분실 시 초기화(본인 확인은 운영 절차로) */
   otp?: OtpService;
+  session?: MarketSession;
+  appConfig?: AppConfigStore;
 }
 
 const faultsBody = z
@@ -69,6 +73,8 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): void
         ts: Date.now(),
         gateways: gateway.gateways ? await gateway.gateways() : undefined,
         faults: { ...market.faults, orderDelayMs: faults.orderDelayMs },
+        session: deps.session ? { phase: deps.session.phase, clock: deps.session.clock, vi: deps.session.activeVi() } : undefined,
+        appConfig: deps.appConfig?.state,
         symbols: market.list().map((s) => ({
           code: s.code,
           name: s.name,
@@ -112,6 +118,46 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): void
         market.setVolatility(multiplier, symbol);
         metrics.inc('hoga_admin_actions_total', { action: 'volatility' });
         return { ok: true };
+      });
+
+      /** 장 운영 구간(관리 콘솔 수동 모드). 단일가 → 다른 구간이면 먼저 단일가 체결한다 */
+      scope.put('/session', async (request, reply) => {
+        const parsed = z.object({ phase: z.enum(['PRE_OPEN', 'OPEN', 'CLOSING', 'CLOSED']) }).strict().safeParse(request.body);
+        if (!parsed.success || !deps.session) return reply.code(400).send({ error: 'BAD_REQUEST' });
+        if (deps.session.clock !== 'manual') return reply.code(409).send({ error: 'CLOCK_IS_KRX' });
+        deps.session.setPhase(parsed.data.phase);
+        metrics.inc('hoga_admin_actions_total', { action: 'session' });
+        request.log.warn({ phase: parsed.data.phase }, 'admin: market phase changed');
+        return { phase: deps.session.phase };
+      });
+
+      /** VI 발동·해제(시연용). 장중에만 */
+      scope.post('/vi', async (request, reply) => {
+        const parsed = z
+          .object({ symbol: z.string().regex(/^\d{6}$/), action: z.enum(['trigger', 'release']) })
+          .strict()
+          .safeParse(request.body);
+        if (!parsed.success || !deps.session) return reply.code(400).send({ error: 'BAD_REQUEST' });
+        const { symbol, action } = parsed.data;
+        if (!market.has(symbol)) return reply.code(404).send({ error: 'UNKNOWN_SYMBOL' });
+        if (action === 'trigger') {
+          if (deps.session.phase !== 'OPEN') return reply.code(409).send({ error: 'NOT_OPEN' });
+          deps.session.triggerVi(symbol, 'DYNAMIC');
+        } else {
+          deps.session.releaseVi(symbol);
+        }
+        metrics.inc('hoga_admin_actions_total', { action: `vi_${action}` });
+        return { vi: deps.session.activeVi() };
+      });
+
+      /** 강제 업데이트·점검 */
+      scope.put('/app-config', async (request, reply) => {
+        const parsed = appConfigUpdate.safeParse(request.body);
+        if (!parsed.success || !deps.appConfig) return reply.code(400).send({ error: 'BAD_REQUEST' });
+        const state = deps.appConfig.update(parsed.data);
+        metrics.inc('hoga_admin_actions_total', { action: 'app_config' });
+        request.log.warn({ change: parsed.data }, 'admin: app config changed');
+        return state;
       });
 
       /** OTP 초기화(기기 분실 등). 감사 로그로 남긴다 */

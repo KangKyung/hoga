@@ -71,6 +71,41 @@
       "source": ["app"],
       "params": {"reason": "origin | schema | version | size | rate", "type": "메시지 종류(알 수 없으면 unknown)"},
       "description": "웹뷰 브리지가 메시지를 거절함(보안·호환성 모니터링)"
+    },
+    "submit_amend": {
+      "source": ["app"],
+      "params": {"symbol": "종목 코드", "side": "bid | ask", "order_type": "limit"},
+      "description": "정정 주문 전송(미체결 → 정정)"
+    },
+    "open_amend": {
+      "source": ["app"],
+      "params": {"symbol": "종목 코드"},
+      "description": "미체결 목록에서 정정 창을 엶"
+    },
+    "cancel_order": {
+      "source": ["app"],
+      "params": {"symbol": "종목 코드", "from": "account | quote"},
+      "description": "미체결 주문 취소"
+    },
+    "open_store": {
+      "source": ["app"],
+      "params": {"reason": "required | optional"},
+      "description": "업데이트 화면·안내에서 스토어로 이동"
+    },
+    "account_open_step": {
+      "source": ["web"],
+      "params": {"step": "terms | profile | phone | idcard | done", "result": "ok | error", "error": "오류 코드(실패 시)"},
+      "description": "비대면 계좌 개설 단계 진행(웹 화면)"
+    },
+    "account_open_id_card": {
+      "source": ["app"],
+      "params": {"source": "camera | library", "bytes": "업로드한 JPEG 크기"},
+      "description": "신분증 사진을 네이티브가 촬영·선택해 서버로 올림"
+    },
+    "account_open_complete": {
+      "source": ["app"],
+      "params": {},
+      "description": "비대면 계좌 개설 완료"
     }
   }
 }

@@ -6,7 +6,8 @@
  * Redis Pub/Sub 구현(src/redis/bus.ts)을 쓴다. payload는 이미 직렬화된 문자열이라 구독자 수와 무관하게
  * 직렬화는 한 번만 일어난다.
  */
-export type MessageKind = 'book' | 'trade';
+/** book: 호가 변경분(seq) · trade: 체결 · status: 매매 상태(장 구간·VI·예상 체결가) */
+export type MessageKind = 'book' | 'trade' | 'status';
 
 export type BusHandler = (symbol: string, kind: MessageKind, payload: string) => void;
 export type UserHandler = (userId: string, payload: string) => void;

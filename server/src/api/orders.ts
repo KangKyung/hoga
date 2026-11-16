@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 
+import type { Ledger } from '../account/ledger.js';
 import type { AuthService } from '../auth/auth.js';
+import { validateOrder, type RejectReason } from '../core.js';
 import type { OtpService } from '../auth/otp.js';
 import type { IdempotencyStore } from '../idempotency.js';
 import type { Market } from '../market/market.js';
@@ -19,6 +21,8 @@ export interface OrderRouteDeps {
   /** OTP를 켠 사용자는 x-step-up 헤더(OTP로 받은 단기 토큰)가 있어야 주문할 수 있다 */
   otp?: OtpService;
   metrics: Metrics;
+  /** 계좌 원장(주문가능금액·매도가능수량). 없으면 확인하지 않는다 */
+  ledger?: Ledger;
   /** 장애 주입: 처리 후 응답만 늦춘다(관리 콘솔에서 바꿀 수 있어 매번 읽는다) */
   responseDelayMs: () => number;
 }
@@ -27,12 +31,70 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 같은 내용이면 같은 지문. 키를 다른 주문에 재사용하는 버그를 잡는다. */
 const fingerprint = (body: OrderBody) =>
-  JSON.stringify([body.symbol, body.side, body.type, body.price ?? 0, body.qty]);
+  JSON.stringify([body.symbol, body.side, body.type, body.price ?? 0, body.qty, body.amendOf ?? '']);
 
 export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps): void {
   const { market, store, tracker, metrics } = deps;
   metrics.describe('hoga_orders_total', 'counter', 'Orders processed by final status');
   metrics.describe('hoga_orders_replayed_total', 'counter', 'Orders answered from the idempotency store');
+
+  /**
+   * 업무 처리(동기). 같은 이벤트 루프 안에서 확인 → 접수가 끝나 다른 주문이 끼어들 틈이 없다.
+   * 정정: 원주문 잔량에서 qty를 빼고(C++ reduce, 남은 잔량은 순서 유지) 새 가격으로 새 주문을 낸다.
+   * 규칙 위반은 엔진에 닿기 전에 REJECTED 기록으로 끝낸다(원주문을 건드리지 않는다).
+   */
+  function execute(userId: string, key: string, body: OrderBody): OrderRecord {
+    const now = Date.now();
+    const order = { side: body.side, type: body.type, price: body.price ?? 0, qty: body.qty };
+    const base: OrderRecord = {
+      key,
+      userId,
+      symbol: body.symbol,
+      ...order,
+      orderId: 0,
+      status: 'REJECTED',
+      reject: 'NONE',
+      filled: 0,
+      resting: 0,
+      fills: [],
+      acceptedAt: now,
+      updatedAt: now,
+      ...(body.amendOf ? { amendOf: body.amendOf } : {}),
+    };
+    const reject = (reason: RejectReason): OrderRecord => ({ ...base, reject: reason });
+
+    let original: OrderRecord | undefined;
+    if (body.amendOf) {
+      original = tracker.get(userId, body.amendOf);
+      if (!original || original.resting === 0 || original.symbol !== body.symbol || original.side !== body.side) {
+        return reject('UNKNOWN_ORDER');
+      }
+      if (body.type !== 'limit') return reject('INVALID_PRICE');
+      if (body.qty > original.resting) return reject('EXCEEDS_OPEN_QTY');
+      // 원주문을 줄이기 전에 새 주문이 규칙에 맞는지 먼저 본다
+      const rule = validateOrder(order, { basePrice: market.info(body.symbol).basePrice });
+      if (rule !== 'NONE') return reject(rule);
+      if (market.mode(body.symbol) === 'HALTED') return reject('MARKET_CLOSED');
+    }
+    const account = deps.ledger?.check(userId, body.symbol, order, original && { key: original.key, qty: body.qty });
+    if (account && account !== 'NONE') return reject(account);
+
+    if (original) {
+      const reduced = market.reduce(original.symbol, original.orderId, body.qty);
+      if (reduced.status === 'REJECTED') return reject(reduced.reject);
+      tracker.markAmended(original, body.qty);
+    }
+    const result = market.submit(body.symbol, order);
+    return {
+      ...base,
+      orderId: result.id,
+      status: result.status,
+      reject: result.reject,
+      filled: result.filled,
+      resting: result.resting,
+      fills: result.fills.map((f) => ({ price: f.price, qty: f.qty })),
+    };
+  }
 
   app.register(async (scope) => {
     // 이 범위의 모든 주문 API는 로그인한 사용자만. 멱등 키·조회·취소 모두 사용자별로 분리된다.
@@ -75,30 +137,7 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
 
       let record: OrderRecord;
       try {
-        const result = market.submit(body.symbol, {
-          side: body.side,
-          type: body.type,
-          price: body.price ?? 0,
-          qty: body.qty,
-        });
-        const now = Date.now();
-        record = {
-          key,
-          userId,
-          symbol: body.symbol,
-          side: body.side,
-          type: body.type,
-          price: body.price ?? 0,
-          qty: body.qty,
-          orderId: result.id,
-          status: result.status,
-          reject: result.reject,
-          filled: result.filled,
-          resting: result.resting,
-          fills: result.fills.map((f) => ({ price: f.price, qty: f.qty })),
-          acceptedAt: now,
-          updatedAt: now,
-        };
+        record = execute(userId, key, body);
         tracker.add(record);
         await store.complete(storeKey, record);
       } catch (err) {
@@ -112,11 +151,34 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       return reply.send(record);
     });
 
-    /** 내 주문 목록(최신순) */
-    scope.get<{ Querystring: { symbol?: string } }>('/orders', async (request) => {
-      const list = tracker.list(request.userId!);
-      return request.query.symbol ? list.filter((r) => r.symbol === request.query.symbol) : list;
+    /** 내 주문 목록(최신순). status=open이면 미체결(잔량 있는 주문)만 */
+    scope.get<{ Querystring: { symbol?: string; status?: string } }>('/orders', async (request) => {
+      const { symbol, status } = request.query;
+      return tracker
+        .list(request.userId!, status === 'open' ? 500 : 50)
+        .filter((r) => (!symbol || r.symbol === symbol) && (status !== 'open' || r.resting > 0));
     });
+
+    /** 잔고: 예수금·주문가능금액·보유 종목 평가 */
+    scope.get('/account', async (request, reply) => {
+      if (!deps.ledger?.has(request.userId!)) return reply.code(404).send({ error: 'NO_ACCOUNT' });
+      return deps.ledger.summary(request.userId!);
+    });
+
+    /** 주문가능: 주문 화면의 "최대" 수량(C++ maxOrderQty) */
+    scope.get<{ Querystring: { symbol?: string; side?: string; type?: string; price?: string } }>(
+      '/account/orderable',
+      async (request, reply) => {
+        const { symbol = '', side, type = 'limit' } = request.query;
+        const price = Number(request.query.price ?? 0);
+        if (!market.has(symbol) || (side !== 'bid' && side !== 'ask') || (type !== 'limit' && type !== 'market')) {
+          return reply.code(400).send({ error: 'BAD_REQUEST' });
+        }
+        if (!Number.isSafeInteger(price) || price < 0) return reply.code(400).send({ error: 'BAD_REQUEST' });
+        if (!deps.ledger?.has(request.userId!)) return reply.code(404).send({ error: 'NO_ACCOUNT' });
+        return deps.ledger.orderable(request.userId!, symbol, side, type, price);
+      },
+    );
 
     /** 주문 결과 조회. 클라이언트는 타임아웃 시 이것으로 접수 여부를 확정한다. */
     scope.get<{ Params: { key: string } }>('/orders/:key', async (request, reply) => {

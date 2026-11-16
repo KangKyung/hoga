@@ -13,7 +13,8 @@ add_library(hoga_core STATIC
   src/market_client.cpp
   src/candles.cpp
   src/chart_layout.cpp
-  src/wire.cpp)
+  src/wire.cpp
+  src/session.cpp)
 target_include_directories(hoga_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # nlohmann/json(MIT, v3.12.0)은 시세 메시지 파싱에만 쓰므로 공개 헤더에 노출하지 않는다.
 target_include_directories(hoga_core SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -57,7 +58,9 @@ if(HOGA_BUILD_TESTS)
     tests/market_client_test.cpp
     tests/candles_test.cpp
     tests/chart_layout_test.cpp
-    tests/wire_test.cpp)
+    tests/wire_test.cpp
+    tests/session_test.cpp
+    tests/account_test.cpp)
   target_link_libraries(hoga_core_tests PRIVATE hoga_core GTest::gtest_main)
   target_include_directories(hoga_core_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
   target_compile_definitions(hoga_core_tests PRIVATE HOGA_SHARED_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../shared")

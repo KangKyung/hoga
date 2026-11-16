@@ -19,7 +19,8 @@ const schema = z.object({
   // ---- 게이트웨이 보호 장치 ----
   WS_HEARTBEAT_MS: z.coerce.number().int().min(1000).default(15_000),
   WS_MAX_PAYLOAD_BYTES: z.coerce.number().int().min(256).default(4 * 1024),
-  WS_MAX_SUBSCRIPTIONS: z.coerce.number().int().min(1).default(20),
+  /** 관심종목은 화면에 보이는 종목만 구독한다(약 15개 + 호가 화면) */
+  WS_MAX_SUBSCRIPTIONS: z.coerce.number().int().min(1).default(40),
   WS_MSG_RATE_PER_SEC: z.coerce.number().min(1).default(20),
   /** 이만큼 쌓이면 변경분 대신 나중에 최신 스냅샷 1개로 합쳐 보낸다 */
   WS_SOFT_BUFFER_BYTES: z.coerce.number().int().min(1024).default(512 * 1024),
@@ -57,6 +58,12 @@ const schema = z.object({
    * all: 한 프로세스에 전부(개발 기본) · market: 시세 단일 작성자 + REST(주문·인증·관리)
    * gateway: WebSocket 팬아웃만(여러 대). market·gateway는 REDIS_URL이 필요하다
    */
+  /** manual: 관리 콘솔로 장 구간을 바꾼다(기본 장중) · krx: 서울 시각 정규장 일정 */
+  SESSION_CLOCK: z.enum(['manual', 'krx']).default('manual'),
+  /** VI 단일가 시간(KRX 2분) */
+  VI_DURATION_MS: z.coerce.number().int().min(1_000).default(120_000),
+  VI_STATIC_BPS: z.coerce.number().int().min(1).default(1_000),
+  VI_DYNAMIC_BPS: z.coerce.number().int().min(1).default(300),
   ROLE: z.enum(['all', 'market', 'gateway']).default('all'),
   /** 있으면 버스·멱등 키·리프레시 토큰을 Redis에 둔다(ROLE=all에서도) */
   REDIS_URL: z.string().optional(),

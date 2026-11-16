@@ -93,8 +93,28 @@ export interface OrderEventMessage {
   status: string;
   filled: number;
   resting: number;
+  amendOf?: string;
+  amended?: number;
   /** 이번 변화가 체결이면 그 체결 */
   fill?: { price: number; qty: number };
+  ts: number;
+}
+
+/**
+ * 종목의 매매 상태. 바뀔 때만(예상 체결가는 최대 초당 5번) 보내고, 구독 직후 스냅샷 다음에 한 번 보낸다.
+ * 빈도가 낮아 이진 연결에도 JSON 텍스트로 보낸다.
+ */
+export interface StatusMessage {
+  t: 'status';
+  sym: string;
+  /** 장 운영 구간(시장 전체) */
+  phase: 'PRE_OPEN' | 'OPEN' | 'CLOSING' | 'CLOSED';
+  /** 이 종목의 매매 방식: 접속매매 / 단일가(동시호가·VI) / 거래 안 됨 */
+  mode: 'CONTINUOUS' | 'AUCTION' | 'HALTED';
+  /** VI 발동 중이면 종류·해제 예정 시각(epoch ms)·발동 기준가 */
+  vi: { kind: 'STATIC' | 'DYNAMIC'; until: number; ref: number } | null;
+  /** 단일가 예상 체결가·수량(단일가가 아니거나 체결이 없으면 null) */
+  exp: { px: number; qty: number } | null;
   ts: number;
 }
 
@@ -106,6 +126,7 @@ export type ServerMessage =
   | TradeMessage
   | ErrorMessage
   | PongMessage
+  | StatusMessage
   | SubscribedMessage;
 
 export const toWireSide = (side: 'bid' | 'ask'): WireSide => (side === 'bid' ? 'B' : 'A');
@@ -119,6 +140,8 @@ export const orderBody = z
     type: z.enum(['limit', 'market']).default('limit'),
     price: z.number().int().nonnegative().optional(),
     qty: z.number().int().positive(),
+    /** 정정 주문: 원주문의 멱등 키. 원주문 미체결 잔량에서 qty만큼 빼서 새 가격으로 낸다 */
+    amendOf: z.string().min(8).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
   })
   .strict();
 export type OrderBody = z.infer<typeof orderBody>;

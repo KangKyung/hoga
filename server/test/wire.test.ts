@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import { createServer, type HogaServer } from '../src/app.js';
+import { TEST_OPTIONS } from './fixtures.js';
 import { loadConfig } from '../src/config.js';
 import { decode, encode, type MarketMessage } from '../src/wire.js';
 
@@ -41,7 +42,7 @@ async function client(server: HogaServer, query = '') {
 
 describe('gateway ?proto=bin', () => {
   it('sends the same market data as binary frames, control messages stay JSON', async () => {
-    const server = createServer(loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0' }));
+    const server = createServer(loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0' }), TEST_OPTIONS);
     await server.start();
     servers.push(server);
     server.market.warmUp(20);

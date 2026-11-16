@@ -6,8 +6,26 @@
  * 3. seq 누락 주입 → 앱이 감지하고 스냅샷으로 다시 맞춤
  * 4. 웹뷰 종목정보의 매수 버튼 → 네이티브 주문 창(웹은 주문을 직접 내지 못함)
  * 5. OTP를 켠 계정의 주문 → 코드 입력 창 → 인증 후 같은 주문 번호로 접수(시험이 인증 앱 역할)
+ * 6. 장 시작 동시호가 표시 → 계좌 미체결에서 정정(원주문 잔량 일부를 새 가격으로)
+ * 7. 서비스 점검: API가 503을 받으면 앱 전체가 점검 화면 → 해제 후 다시 확인
  */
-import {admin, api, byId, exists, goHome, resetFaults, scrollTo, signInFresh, t, tap, tapIfPresent, textOf, totp, waitForText} from '../support/app.js';
+import {
+  admin,
+  api,
+  byId,
+  exists,
+  goHome,
+  resetFaults,
+  scrollTo,
+  SERVER,
+  signInFresh,
+  t,
+  tap,
+  tapIfPresent,
+  textOf,
+  totp,
+  waitForText,
+} from '../support/app.js';
 
 const FINAL = [t('order.accepted'), t('order.filled', {filled: ''}).split('(')[0]!, t('order.partial', {filled: '', resting: ''}).split(' ')[0]!];
 const isFinal = (s: string) => FINAL.some(prefix => s.startsWith(prefix.trim()));
@@ -114,4 +132,64 @@ describe('Hoga MTS', () => {
       await signInFresh().catch(e => console.warn('cleanup sign-in failed:', e));
     }
   });
+
+  it('shows the auction phase and modifies an open order from the account screen', async () => {
+    const login = await api('/auth/login', {username: 'demo', password: 'hoga-demo-1234'});
+    const token = login.body.accessToken!;
+    // 체결되지 않도록 하한가 근처 지정가(서버 API로 미리 걸어 둔다)
+    const key = `e2e-amend-${Date.now()}`;
+    const placed = await orderApi(token, key, {symbol: '000001', side: 'bid', type: 'limit', price: 60_000, qty: 3});
+    expect(placed.status).toBe('NEW');
+    try {
+      await admin('PUT', '/session', {phase: 'PRE_OPEN'});
+      await tap('watch-000001');
+      await waitForText('sessionPhase', s => s === t('session.phase.PRE_OPEN'), 15_000, 'pre-open badge');
+      await admin('PUT', '/session', {phase: 'OPEN'});
+      await waitForText('sessionPhase', s => s === t('session.phase.OPEN'), 15_000, 'open badge');
+      await goHome();
+
+      await tap('openAccount');
+      // 잔고를 받은 뒤에 탭을 누른다(그 전에는 화면이 아직 바뀌는 중)
+      await byId('availableCash').waitForDisplayed({timeout: 15_000});
+      await tap('accountTab-open');
+      await tap(`amend-${key}`);
+      await tap('priceUp');
+      await tap('submitOrder');
+      await waitForText('orderProgress', isFinal, 20_000, 'amend result');
+      const original = await getApi(token, `/orders/${key}`);
+      expect(original).toMatchObject({resting: 0, amended: 3});
+    } finally {
+      await admin('PUT', '/session', {phase: 'OPEN'}).catch(() => {});
+      // 정정으로 생긴 주문까지 미체결을 모두 정리
+      const open = (await getApi(token, '/orders?status=open').catch(() => [])) as unknown as {key: string}[];
+      for (const o of open) await api(`/orders/${o.key}/cancel`, {}, token).catch(() => {});
+    }
+  });
+
+  it('switches the whole app to the maintenance screen when the server is under maintenance', async () => {
+    await admin('PUT', '/app-config', {maintenance: {active: true, until: Date.now() + 10 * 60_000}});
+    try {
+      // 계좌 조회가 503 MAINTENANCE를 받으면 앱이 원격 설정을 다시 읽는다
+      await tap('openAccount');
+      await byId('maintenance').waitForDisplayed({timeout: 15_000});
+    } finally {
+      await admin('PUT', '/app-config', {maintenance: {active: false}});
+    }
+    await tap('retryGate');
+    await byId('watch-000001').waitForDisplayed({timeout: 15_000});
+  });
 });
+
+async function orderApi(token: string, key: string, body: Record<string, unknown>) {
+  const res = await fetch(`${SERVER}/orders`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${token}`, 'idempotency-key': key},
+    body: JSON.stringify(body),
+  });
+  return (await res.json()) as {status: string};
+}
+
+async function getApi(token: string, path: string) {
+  const res = await fetch(`${SERVER}${path}`, {headers: {authorization: `Bearer ${token}`}});
+  return (await res.json()) as Record<string, unknown>;
+}

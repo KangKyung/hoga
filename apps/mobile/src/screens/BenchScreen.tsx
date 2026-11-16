@@ -15,6 +15,7 @@ import {PerfCollector, usePerfMeter, type PerfSample} from '../bench/perfMeter';
 import {SERVER} from '../config';
 import {useBook} from '../hooks/market';
 import {useI18n} from '../i18n';
+import {useSubscription} from '../market/subscriptions';
 import {hogaCore, type BookView} from '../native/hogaCore';
 import {colors, formatPrice, mono} from '../theme';
 
@@ -54,6 +55,7 @@ export const formatResult = (r: BenchResult) =>
 
 export function BenchScreen({symbol, onBack}: {symbol: string; onBack: () => void}) {
   const {t} = useI18n();
+  useSubscription([symbol]);
   const collector = useMemo(() => new PerfCollector(), []);
   const sample = usePerfMeter(collector);
   const [mode, setMode] = useState<BenchMode>('cpp');

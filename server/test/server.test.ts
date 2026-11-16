@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import { createServer, type HogaServer } from '../src/app.js';
+import { TEST_OPTIONS } from './fixtures.js';
 import { loadConfig } from '../src/config.js';
 import type { ServerMessage } from '../src/protocol.js';
 
@@ -10,8 +11,7 @@ const servers: HogaServer[] = [];
 
 async function start(env: Record<string, string> = {}) {
   const server = createServer(
-    loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0', ...env }),
-  );
+    loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0', ...env }), TEST_OPTIONS);
   await server.start();
   servers.push(server);
   return server;

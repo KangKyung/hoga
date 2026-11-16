@@ -406,3 +406,35 @@ TEST(MarketClient, AppliesBinaryMarketDataLikeJson) {
   EXPECT_EQ(f.client->stats().parseErrors, 1u);
   EXPECT_EQ(f.client->stats().state, ConnectionState::Open);
 }
+
+TEST(MarketClient, KeepsLatestStatusPerSubscribedSymbol) {
+  Fixture f;
+  f.client->subscribe({"000001"});
+  f.client->start();
+  f.transport->open();
+  f.transport->message(snap(10, 71'200, 100));
+  EXPECT_EQ(f.client->book("000001", 1).session.phase, "");  // 아직 모름
+
+  f.transport->message(
+      R"({"t":"status","sym":"000001","phase":"OPEN","mode":"AUCTION","vi":{"kind":"DYNAMIC","until":1700000120000,"ref":71200},"exp":{"px":73300,"qty":420},"ts":1})");
+  // 구독하지 않은 종목은 무시
+  f.transport->message(R"({"t":"status","sym":"000009","phase":"OPEN","mode":"HALTED","vi":null,"exp":null,"ts":1})");
+  auto s = f.client->book("000001", 1).session;
+  EXPECT_EQ(s.phase, "OPEN");
+  EXPECT_EQ(s.mode, "AUCTION");
+  EXPECT_EQ(s.viKind, "DYNAMIC");
+  EXPECT_EQ(s.viUntil, 1'700'000'120'000);
+  EXPECT_EQ(s.viRef, 71'200);
+  EXPECT_EQ(s.expPrice, 73'300);
+  EXPECT_EQ(s.expQty, 420);
+  EXPECT_FALSE(f.client->book("000009", 1).subscribed);
+
+  // VI 해제: vi·exp가 null이면 비운다. 상태는 seq와 무관해 호가 동기화에 영향이 없다
+  f.transport->message(R"({"t":"status","sym":"000001","phase":"OPEN","mode":"CONTINUOUS","vi":null,"exp":null,"ts":2})");
+  s = f.client->book("000001", 1).session;
+  EXPECT_EQ(s.mode, "CONTINUOUS");
+  EXPECT_EQ(s.viKind, "");
+  EXPECT_EQ(s.expQty, 0);
+  EXPECT_EQ(f.client->book("000001", 1).seq, 10u);
+  EXPECT_EQ(f.client->stats().parseErrors, 0u);
+}

@@ -35,6 +35,7 @@ jest.mock('../specs/NativeHogaCore', () => ({
     roundToTick: (p: number, mode: string) => (mode === 'up' ? Math.ceil(p / 100) * 100 : Math.floor(p / 100) * 100),
     priceLimits: () => ({lower: 49_900, upper: 92_500}),
     validateOrder: () => 'NONE',
+    checkAccount: () => 'NONE',
     randomId: () => 'key-123',
     connect: jest.fn(),
     setAuthToken: jest.fn(),
@@ -69,6 +70,11 @@ jest.mock('../specs/NativeSecureStore', () => ({
     },
     biometryType: async () => 'none',
   },
+}));
+
+jest.mock('../specs/NativeDocumentCapture', () => ({
+  __esModule: true,
+  default: {isCameraAvailable: () => false, capture: jest.fn()},
 }));
 
 jest.mock('../specs/NativeDeviceGuard', () => ({
@@ -185,12 +191,16 @@ test('login → watchlist → quote screen → order sheet', async () => {
   // 로그인: 리프레시 토큰은 보안 저장소에, 액세스 토큰은 C++ 시세 클라이언트로
   expect(mockStore.get('auth.refreshToken')).toBe(tokens.refreshToken);
   expect(NativeHogaCore.setAuthToken).toHaveBeenCalledWith('access-1');
-  expect(NativeHogaCore.subscribe).toHaveBeenCalledWith(['000001']);
 
   await ReactTestRenderer.act(async () => {
     r!.root.findByProps({testID: 'watch-000001'}).props.onPress();
     await flush();
   });
+  // 호가 화면이 그 종목을 구독한다(모아서 보내므로 잠깐 뒤)
+  await ReactTestRenderer.act(async () => {
+    await new Promise<void>(resolve => setTimeout(() => resolve(), 200));
+  });
+  expect(NativeHogaCore.subscribe).toHaveBeenCalledWith(['000001']);
   expect(r!.root.findAllByProps({testID: 'ask-71300'}).length).toBeGreaterThan(0);
 
   // 매도 호가를 누르면 그 가격으로 매수 주문 창
@@ -418,5 +428,109 @@ test('OTP settings: enroll shows a QR and the key once, a code turns it on', asy
   expect(r.root.findByProps({testID: 'otpStatus'}).props.children).toBe('사용 중 — 주문 전 10분마다 코드 확인');
   expect(r.root.findAllByProps({testID: 'otpSecret'})).toHaveLength(0); // 키는 다시 보여 주지 않는다
 
+  await ReactTestRenderer.act(async () => r.unmount());
+});
+
+test('최소 버전보다 낮으면 업데이트 화면만, 점검 중이면 점검 화면', async () => {
+  const base = (globalThis.fetch as jest.Mock).getMockImplementation()!;
+  let config: {
+    update: string;
+    minVersion: string;
+    latestVersion: string;
+    storeUrl: string;
+    maintenance: {active: boolean; until: number | null; message: string};
+  } = {
+    update: 'required',
+    minVersion: '9.0.0',
+    latestVersion: '9.0.0',
+    storeUrl: 'https://apps.apple.com/',
+    maintenance: {active: false, until: null, message: ''},
+  };
+  (globalThis.fetch as jest.Mock).mockImplementation(async (url: string) =>
+    url.includes('/app/config') ? respond(200, config) : base(url),
+  );
+  let r: ReactTestRenderer.ReactTestRenderer | undefined;
+  await ReactTestRenderer.act(async () => {
+    r = ReactTestRenderer.create(<App />);
+    await flush();
+    await flush();
+  });
+  expect(r!.root.findAllByProps({testID: 'forceUpdate'}).length).toBeGreaterThan(0);
+  expect(r!.root.findAllByProps({testID: 'login'})).toHaveLength(0);
+
+  config = {...config, update: 'none', maintenance: {active: true, until: Date.now() + 60_000, message: '점검 중'}};
+  await ReactTestRenderer.act(async () => {
+    r!.root.findByProps({testID: 'openStore'}); // 업데이트 화면에는 스토어 버튼
+  });
+  // 다시 읽게(포그라운드 복귀 등) → 점검 화면
+  await ReactTestRenderer.act(async () => {
+    r!.unmount();
+    r = ReactTestRenderer.create(<App />);
+    await flush();
+    await flush();
+  });
+  expect(r!.root.findAllByProps({testID: 'maintenance'}).length).toBeGreaterThan(0);
+  r!.unmount();
+});
+
+test('계좌 화면: 잔고·미체결을 보여 주고, 정정은 같은 주문 창을 정정 모드로 연다', async () => {
+  const base = (globalThis.fetch as jest.Mock).getMockImplementation()!;
+  const open = {
+    key: 'order-key-1',
+    userId: 'u-demo',
+    symbol: '000001',
+    side: 'bid',
+    type: 'limit',
+    price: 70_000,
+    qty: 10,
+    orderId: 7,
+    status: 'NEW',
+    reject: 'NONE',
+    filled: 0,
+    resting: 10,
+    fills: [],
+    acceptedAt: 0,
+    updatedAt: 0,
+  };
+  (globalThis.fetch as jest.Mock).mockImplementation(async (url: string) => {
+    if (url.endsWith('/account'))
+      return respond(200, {
+        accountNo: '5001-10-000001',
+        cash: 50_000_000,
+        reservedCash: 700_000,
+        availableCash: 49_300_000,
+        realizedPnl: 0,
+        positions: [
+          {symbol: '000001', name: '가상전자', qty: 100, sellable: 100, avgPrice: 69_800, lastPrice: 71_200, value: 7_120_000, pnl: 140_000, pnlRate: 2.01},
+        ],
+        totals: {purchase: 6_980_000, value: 7_120_000, pnl: 140_000, pnlRate: 2.01, equity: 57_120_000},
+      });
+    if (url.includes('/orders?status=open')) return respond(200, [open]);
+    if (url.includes('/account/orderable')) return respond(200, {availableCash: 49_300_000, sellableQty: 100, maxQty: 704, unitPrice: 70_000});
+    return base(url);
+  });
+  const r = await renderSignedIn();
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'openAccount'}).props.onPress();
+    await flush();
+    await flush();
+  });
+  expect(r.root.findAllByProps({testID: 'position-000001'}).length).toBeGreaterThan(0);
+
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'accountTab-open'}).props.onPress();
+  });
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'amend-order-key-1'}).props.onPress();
+    await flush();
+  });
+  // 정정 모드: 매수/매도는 바꿀 수 없고 수량은 잔량으로 시작
+  expect(r.root.findByProps({testID: 'side-ask'}).props.disabled).toBe(true);
+  expect(r.root.findByProps({testID: 'orderQty'}).props.value).toBe('10');
+  // 주문가능 조회(250ms 모아서)가 끝난 뒤 정리
+  await ReactTestRenderer.act(async () => {
+    await new Promise<void>(resolve => setTimeout(() => resolve(), 350));
+  });
+  expect(r.root.findByProps({testID: 'orderable'}).props.children).toContain('10');
   await ReactTestRenderer.act(async () => r.unmount());
 });

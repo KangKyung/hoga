@@ -6,7 +6,7 @@
  * 클라이언트(C++ BookSync)와 같은 규칙: seq가 last+1일 때만 반영, qty는 새 잔량(0 = 삭제),
  * 누락이 보이면 스냅샷을 다시 받는다. 받는 동안 온 변경분은 모았다가 스냅샷 뒤의 것만 반영한다.
  */
-import type { DeltaMessage, SnapshotMessage, WireLevel } from '../protocol.js';
+import type { DeltaMessage, SnapshotMessage, StatusMessage, WireLevel } from '../protocol.js';
 import type { SnapshotProvider } from './gateway.js';
 
 interface SymbolBook {
@@ -27,6 +27,8 @@ export class BookReplica implements SnapshotProvider {
   resyncs = 0;
   /** 버스 지연 표본(시세에 찍힌 시각 → 이 gateway가 받은 시각, ms). 최근 1,000개 */
   private readonly lags: number[] = [];
+  /** 종목별 최신 매매 상태(버스의 status 원문). 처음엔 market에서 받는다 */
+  private readonly statuses = new Map<string, StatusMessage>();
 
   constructor(
     private readonly marketUrl: string,
@@ -44,7 +46,26 @@ export class BookReplica implements SnapshotProvider {
     for (const { code } of symbols) {
       this.books.set(code, { bids: new Map(), asks: new Map(), seq: 0, live: false, loading: false, pending: [] });
     }
-    await Promise.all(symbols.map(({ code }) => this.load(code)));
+    await Promise.all([...symbols.map(({ code }) => this.load(code)), this.loadStatus()]);
+  }
+
+  /** 버스에서 받은 매매 상태 */
+  onStatus(symbol: string, payload: string): void {
+    if (!this.books.has(symbol)) return;
+    this.statuses.set(symbol, JSON.parse(payload) as StatusMessage);
+  }
+
+  status(symbol: string): StatusMessage | undefined {
+    return this.statuses.get(symbol);
+  }
+
+  private async loadStatus(): Promise<void> {
+    try {
+      const list = (await this.fetchJson(`${this.marketUrl}/market/status`)) as StatusMessage[];
+      for (const s of list) this.statuses.set(s.sym, s);
+    } catch {
+      // 다음 상태 변화가 버스로 오면 채워진다
+    }
   }
 
   /** 버스에서 받은 시세 원문(book 종류만) */
@@ -71,6 +92,7 @@ export class BookReplica implements SnapshotProvider {
 
   /** 버스 구독이 끊겼다 붙음 → 놓친 변경분이 있을 수 있으니 전부 다시 받는다 */
   resyncAll(): void {
+    void this.loadStatus();
     for (const [symbol, book] of this.books) {
       book.live = false;
       void this.load(symbol);

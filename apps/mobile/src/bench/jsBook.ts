@@ -72,6 +72,8 @@ export class JsBook {
       subscribed: true,
       seq: this.seq,
       sync: this.live ? 'live' : 'resyncing',
+      // 비교 실험은 호가만 본다(매매 상태 없음)
+      session: {phase: '', mode: '', viKind: '', viUntil: 0, viRef: 0, expPrice: 0, expQty: 0},
       bids: top(this.bids, true),
       asks: top(this.asks, false),
       lastUpdateMs: this.updatedAt,

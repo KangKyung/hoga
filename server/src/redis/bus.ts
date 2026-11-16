@@ -53,7 +53,7 @@ export class RedisBus implements Bus {
     sub.on('pmessage', (_pattern: string, channel: string, message: string) => {
       if (channel.startsWith(MD)) {
         const symbol = channel.slice(MD.length);
-        const kind: MessageKind = message[0] === 'b' ? 'book' : 'trade';
+        const kind: MessageKind = message[0] === 'b' ? 'book' : message[0] === 's' ? 'status' : 'trade';
         const payload = message.slice(1);
         for (const h of this.handlers) h(symbol, kind, payload);
       } else if (channel.startsWith(USER)) {
@@ -69,7 +69,7 @@ export class RedisBus implements Bus {
   }
 
   publish(symbol: string, kind: MessageKind, payload: string): void {
-    void this.pub.publish(MD + symbol, (kind === 'book' ? 'b' : 't') + payload);
+    void this.pub.publish(MD + symbol, (kind === 'book' ? 'b' : kind === 'status' ? 's' : 't') + payload);
   }
 
   subscribeAll(handler: BusHandler): () => void {

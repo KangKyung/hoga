@@ -39,6 +39,22 @@ enum class OrderStatus : std::uint8_t {
 
 std::string_view toString(OrderStatus status) noexcept;
 
+// 매매 방식
+enum class TradingMode : std::uint8_t {
+  Continuous,  // 접속매매: 들어오는 즉시 반대편과 체결
+  Auction,     // 단일가매매(장 시작·마감 동시호가, VI): 모아 두었다가 uncross()로 한 가격에 체결
+  Halted,      // 장 종료: 새 주문을 받지 않는다(취소·정정 축소는 된다)
+};
+
+std::string_view toString(TradingMode mode) noexcept;
+
+// 단일가 예상 체결. qty == 0이면 지금 모인 주문으로는 체결이 없다.
+struct Indicative {
+  Price price{0};
+  Qty qty{0};
+  friend bool operator==(const Indicative&, const Indicative&) = default;
+};
+
 struct ExecutionResult {
   OrderId id{0};
   OrderStatus status{OrderStatus::Rejected};
@@ -57,6 +73,16 @@ class MatchingEngine {
 
   ExecutionResult submit(const OrderRequest& order);
   ExecutionResult cancel(OrderId id);
+  // 미체결 잔량을 qty만큼 줄인다(정정의 원주문 쪽). 남은 수량은 시간 우선순위를 그대로 지킨다.
+  // qty가 잔량과 같으면 취소와 같다.
+  ExecutionResult reduce(OrderId id, Qty qty);
+
+  void setMode(TradingMode mode) noexcept { mode_ = mode; }
+  TradingMode mode() const noexcept { return mode_; }
+  // 지금 모인 주문을 한 가격에 체결한다면: 체결량 최대 → 남는 수량 최소 → 기준가에 가까운 가격
+  Indicative indicative(Price reference) const;
+  // 단일가 체결. 체결가는 모두 indicative().price, 매수 주문을 taker로 기록한다.
+  ExecutionResult uncross(Price reference);
 
   std::vector<Level> depth(Side side, std::size_t levels) const;
   std::optional<Price> lastPrice() const noexcept { return lastPrice_; }
@@ -88,6 +114,7 @@ class MatchingEngine {
   AskMap asks_;
   std::unordered_map<OrderId, std::pair<Side, Price>> index_;
   OrderId nextId_{1};
+  TradingMode mode_{TradingMode::Continuous};
   std::optional<Price> lastPrice_;
 };
 

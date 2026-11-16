@@ -36,6 +36,13 @@ export interface TokenSource {
 }
 
 let tokenSource: TokenSource | null = null;
+
+/** 서버가 점검 중(503 MAINTENANCE)이라고 답했을 때. 앱 게이트가 원격 설정을 다시 읽는다 */
+const maintenanceListeners = new Set<() => void>();
+export function onMaintenance(listener: () => void): () => void {
+  maintenanceListeners.add(listener);
+  return () => maintenanceListeners.delete(listener);
+}
 export function setTokenSource(source: TokenSource | null) {
   tokenSource = source;
 }
@@ -75,6 +82,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
   const text = await res.text();
   const data = text ? JSON.parse(text) : undefined;
+  if (res.status === 503 && data?.error === 'MAINTENANCE') for (const l of maintenanceListeners) l();
   if (!res.ok && res.status !== 202) throw new HttpError(res.status, data ?? {});
   return {status: res.status, data: data as T};
 }
