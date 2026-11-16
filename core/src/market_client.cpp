@@ -339,6 +339,8 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
     }
     if (type == "authed") {
       stats_.authenticated = true;
+      // 앱에도 알린다: 인증이 끊겼던 사이(토큰 만료·재연결) 놓친 주문 알림을 REST로 다시 조회하게
+      if (!authToken_.empty() && userListener_) after.push_back([listener = userListener_, text] { listener(text); });
       return;
     }
     if (type == "unauthed") {

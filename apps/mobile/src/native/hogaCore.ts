@@ -107,6 +107,11 @@ export const hogaCore = {
       const event = parseUserEvent(json);
       if (event?.t === 'order') listener(event as OrderEvent);
     }),
+  /** WS 인증 성공(로그인·재연결·토큰 갱신 뒤). 그 전 끊겨 있던 사이의 주문 변화는 REST로 다시 조회한다 */
+  onAuthenticated: (listener: () => void) =>
+    NativeHogaCore.onOrderEvent(json => {
+      if (parseUserEvent(json)?.t === 'authed') listener();
+    }),
   /** 서버가 WS 인증을 거절함(액세스 토큰 만료 등) → 토큰을 갱신하면 C++가 새 토큰으로 다시 인증한다 */
   onAuthRejected: (listener: () => void) =>
     NativeHogaCore.onOrderEvent(json => {

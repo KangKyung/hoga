@@ -51,9 +51,11 @@ export function AccountScreen({symbols, onBack, onSelectSymbol}: Props) {
     load();
     const timer = setInterval(load, REFRESH_MS);
     const sub = hogaCore.onOrderEvent(() => load());
+    const authed = hogaCore.onAuthenticated(() => load());
     return () => {
       clearInterval(timer);
       sub.remove();
+      authed.remove();
     };
   }, [load]);
 

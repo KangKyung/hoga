@@ -340,6 +340,8 @@ describe('비대면 계좌 개설', () => {
 
     const login = await call(server, 'POST', '/auth/login', { username: 'newbie01', password: 'newbie-pass-1' });
     expect(login.status).toBe(200);
+    // 사용자 ID는 사용자명에서 만들지 않는다(재시작 뒤 같은 이름 개설로 이전 토큰·OTP가 이어지지 않게)
+    expect((login.body as { user: { id: string } }).user.id).toMatch(/^u-[0-9a-f-]{36}$/);
     const acct = await call(server, 'GET', '/account', undefined, { authorization: `Bearer ${login.body.accessToken as string}` });
     expect(acct.body).toMatchObject({ cash: 10_000_000, accountNo: done.body.accountNo, positions: [] });
   });

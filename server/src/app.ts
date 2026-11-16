@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
@@ -123,7 +124,9 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
 
   app.get('/healthz', async () => ({ ok: true, coreVersion: coreVersion(), uptimeMs: Date.now() - startedAt }));
   const backend = redisBus ? 'redis' : 'memory';
-  app.get('/readyz', async () => ({ ready: true, role: config.ROLE, bus: backend, idempotency: backend, refreshTokens: backend }));
+  // epoch: 이 프로세스의 세대. gateway 복제본이 market 재시작을 seq 대신 이것으로 알아챈다
+  const epoch = randomUUID();
+  app.get('/readyz', async () => ({ ready: true, role: config.ROLE, epoch, bus: backend, idempotency: backend, refreshTokens: backend }));
   app.get('/metrics', async (_request, reply) =>
     reply.type('text/plain; version=0.0.4').send(metrics.render()),
   );
@@ -249,11 +252,8 @@ export function createGatewayServer(config: Config): GatewayServer {
   const loopLag = monitorEventLoopDelay({ resolution: 10 });
   loopLag.enable();
   // market 재시작이면 클라이언트 장부의 seq도 옛것이라 새 seq를 모두 버린다 → 재접속시켜 새 스냅샷부터.
-  // 종목마다 감지되므로 한 번만(2초 안의 반복은 무시)
-  let lastRestart = 0;
+  // 복제본이 전 종목을 다시 받은 뒤 한 번 부른다
   const onMarketRestart = () => {
-    if (Date.now() - lastRestart < 2_000) return;
-    lastRestart = Date.now();
     log.warn({ closed: gateway.disconnectAll('market restart') }, 'market restarted: reconnecting clients');
   };
   const replica = new BookReplica(config.MARKET_URL, undefined, undefined, onMarketRestart);
@@ -262,7 +262,7 @@ export function createGatewayServer(config: Config): GatewayServer {
     if (kind === 'book') replica.onBook(symbol, payload);
     else if (kind === 'status') replica.onStatus(symbol, payload);
   });
-  bus.onResubscribe(() => replica.resyncAll());
+  bus.onResubscribe(() => void replica.resyncAll());
   const auth = new AuthService(new UserStore(), authConfig(config));
   const gateway = new Gateway(app.server, bus, replica, metrics, config, log, (token) => {
     try {
@@ -274,7 +274,7 @@ export function createGatewayServer(config: Config): GatewayServer {
   });
   bus.subscribeAdmin((command) => {
     if (command === 'disconnect') log.warn({ closed: gateway.disconnectAll() }, 'admin: disconnected all clients');
-    if (command === 'market-started') replica.resyncAll();
+    if (command === 'market-started') void replica.resyncAll();
   });
   let stopReport = () => {};
   let id = config.GATEWAY_ID ?? '';

@@ -364,6 +364,10 @@ TEST(MarketClient, LogoutSendsUnauthAndDropsLateOrderEvents) {
   f.client->start();
   f.transport->open();
   f.transport->message(R"({"t":"authed","userId":"u-demo"})");
+  // 인증 성공도 앱에 알린다(끊겨 있던 사이의 주문 변화를 REST로 다시 조회하게)
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_NE(events[0].find("authed"), std::string::npos);
+  events.clear();
 
   // 로그아웃: 연결은 그대로, 서버에 unauth만 보낸다(빈 토큰으로 아무것도 안 보내면 서버는 계속 이전 사용자로 안다)
   f.client->setAuthToken("");
@@ -382,8 +386,8 @@ TEST(MarketClient, LogoutSendsUnauthAndDropsLateOrderEvents) {
   EXPECT_TRUE(f.client->stats().authenticated);
   f.transport->message(R"({"t":"error","code":"UNAUTHORIZED","message":"access token expired"})");
   EXPECT_FALSE(f.client->stats().authenticated);
-  ASSERT_EQ(events.size(), 1u);
-  EXPECT_NE(events[0].find("UNAUTHORIZED"), std::string::npos);
+  ASSERT_EQ(events.size(), 2u);  // authed, 그다음 UNAUTHORIZED
+  EXPECT_NE(events[1].find("UNAUTHORIZED"), std::string::npos);
   f.client->setAuthToken("");
   events.clear();
 

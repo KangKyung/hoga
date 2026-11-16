@@ -7,9 +7,11 @@
  * 누락이 보이면 스냅샷을 다시 받는다. 받는 동안 온 변경분은 모았다가 스냅샷 뒤의 것만 반영한다.
  *
  * market 재시작: 새 market은 seq를 처음부터 센다. 그대로 두면 복제본과 클라이언트가 작은 seq를 모두
- * "이미 받은 것"으로 버려 호가가 조용히 멈춘다. market이 시작할 때 버스로 알리면(market-started) 전부 다시 받고,
- * 다시 받은 스냅샷의 seq가 가진 것보다 작으면 재시작으로 보고 onMarketRestart를 부른다
- * (gateway는 클라이언트를 1012로 재접속시켜 새 스냅샷부터 받게 한다).
+ * "이미 받은 것"으로 버려 호가가 조용히 멈춘다(seq가 우연히 이어지면 옛 장부 위에 새 변경분이 쌓인다).
+ * 그래서 seq가 아니라 market 세대(프로세스마다 새 epoch, /readyz)로 판단한다.
+ *   market-started 알림·버스 재구독 → 세대 확인 + 전 종목 다시 받기 → 세대가 바뀌었으면(또는 seq가 줄었으면)
+ *   **모든 종목이 다시 live가 된 뒤** 한 번 onMarketRestart(gateway는 클라이언트를 1012로 재접속).
+ * 일부 종목만 받은 상태에서 끊으면, 그 사이 재접속한 클라이언트가 아직 옛 장부인 종목을 받아 멈추기 때문이다.
  */
 import type { DeltaMessage, SnapshotMessage, StatusMessage, WireLevel } from '../protocol.js';
 import type { SnapshotProvider } from './gateway.js';
@@ -33,6 +35,13 @@ export class BookReplica implements SnapshotProvider {
   private readonly lags: number[] = [];
   /** 종목별 최신 매매 상태(버스의 status 원문). 처음엔 market에서 받는다 */
   private readonly statuses = new Map<string, StatusMessage>();
+  /** 따라가는 market 프로세스의 세대 */
+  private epoch: string | undefined;
+  /** 다시 받는 중 seq가 줄어든 종목이 있었다(세대 확인이 실패해도 재시작을 잡는다) */
+  private seqDropped = false;
+  private resyncing: Promise<void> | undefined;
+  /** 다시 받기가 진행 중일 때 또 요청이 오면 끝난 뒤 한 번 더 */
+  private resyncAgain = false;
 
   constructor(
     private readonly marketUrl: string,
@@ -47,6 +56,7 @@ export class BookReplica implements SnapshotProvider {
 
   /** market의 종목 목록을 받아 모든 종목의 스냅샷을 채운다 */
   async start(): Promise<void> {
+    this.epoch = await this.fetchEpoch();
     const symbols = (await this.fetchJson(`${this.marketUrl}/symbols`)) as { code: string }[];
     for (const { code } of symbols) {
       this.books.set(code, { bids: new Map(), asks: new Map(), seq: 0, live: false, loading: false, pending: [] });
@@ -95,12 +105,44 @@ export class BookReplica implements SnapshotProvider {
     this.apply(book, msg);
   }
 
-  /** 버스 구독이 끊겼다 붙음 → 놓친 변경분이 있을 수 있으니 전부 다시 받는다 */
-  resyncAll(): void {
+  /** market-started 알림·버스 재구독 → 세대 확인 후 전부 다시 받는다. 끝나면 resolve(시험용) */
+  resyncAll(): Promise<void> {
+    if (this.resyncing) {
+      this.resyncAgain = true;
+      return this.resyncing;
+    }
+    this.resyncing = this.resync().finally(() => {
+      this.resyncing = undefined;
+      if (this.resyncAgain) {
+        this.resyncAgain = false;
+        void this.resyncAll();
+      }
+    });
+    return this.resyncing;
+  }
+
+  private async resync(): Promise<void> {
+    const epoch = await this.fetchEpoch();
+    const epochChanged = epoch !== undefined && this.epoch !== undefined && epoch !== this.epoch;
+    if (epoch !== undefined) this.epoch = epoch;
     void this.loadStatus();
-    for (const [symbol, book] of this.books) {
-      book.live = false;
-      void this.load(symbol);
+    for (const book of this.books.values()) book.live = false;
+    await Promise.all([...this.books.keys()].map((symbol) => this.load(symbol)));
+    if (!epochChanged && !this.seqDropped) return;
+    this.seqDropped = false;
+    // 실패한 종목은 load가 500ms마다 다시 받는다. 전부 live가 될 때까지(최대 15초) 기다린 뒤 한 번만 끊는다
+    const deadline = this.now() + 15_000;
+    while ([...this.books.values()].some((b) => !b.live) && this.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    this.onMarketRestart();
+  }
+
+  private async fetchEpoch(): Promise<string | undefined> {
+    try {
+      return ((await this.fetchJson(`${this.marketUrl}/readyz`)) as { epoch?: string }).epoch;
+    } catch {
+      return undefined;
     }
   }
 
@@ -142,7 +184,11 @@ export class BookReplica implements SnapshotProvider {
     try {
       // 전체 호가를 받아야 변경분만으로 장부를 정확히 이어 갈 수 있다
       const snap = (await this.fetchJson(`${this.marketUrl}/book/${symbol}?depth=all`)) as SnapshotMessage;
-      if (snap.seq < book.seq) this.onMarketRestart();
+      if (snap.seq < book.seq) {
+        // 세대 확인 없이도 재시작이 보이면(누락으로 다시 받다가) 전체 다시 받기로 넘긴다
+        this.seqDropped = true;
+        if (!this.resyncing) void this.resyncAll();
+      }
       book.bids = new Map(snap.bids);
       book.asks = new Map(snap.asks);
       book.seq = snap.seq;

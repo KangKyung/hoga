@@ -214,7 +214,10 @@ export class AccountOpenService {
     if (app.accountNo || app.completing) return { error: 'ALREADY_DONE' } as const;
     const parsed = completeBody.safeParse(raw);
     if (!parsed.success) return { error: 'INVALID_PASSWORD' } as const;
-    const userId = `u-${app.profile.username}`;
+    // 사용자 ID는 사용자명과 분리한 무작위 값. 사용자는 메모리에만 있어 market을 재시작하면 사라지는데
+    // 리프레시 토큰·OTP는 Redis에 남는다 → 이름에서 ID를 만들면 재시작 뒤 같은 이름으로 개설한 사람의 계정이
+    // 이전 토큰·OTP에 그대로 연결된다(계정 탈취)
+    const userId = `u-${randomUUID()}`;
     // 비밀번호 해시(비동기)를 기다리는 동안 같은 신청서로 다시 완료를 부르지 못하게
     app.completing = true;
     let created;

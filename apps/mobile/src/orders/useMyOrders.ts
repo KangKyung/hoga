@@ -25,6 +25,12 @@ export function useMyOrders(symbol: string) {
     if (connection === 'open') reload();
   }, [connection, reload]);
 
+  // 인증이 끊겼다 다시 붙으면(토큰 만료 → 갱신) 그 사이 서버가 보내지 못한 알림이 있을 수 있다
+  useEffect(() => {
+    const sub = hogaCore.onAuthenticated(reload);
+    return () => sub.remove();
+  }, [reload]);
+
   useEffect(() => {
     const sub = hogaCore.onOrderEvent((e: OrderEvent) => {
       if (e.symbol !== symbol) return;

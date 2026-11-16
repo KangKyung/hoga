@@ -30,6 +30,9 @@ import {SettingsScreen} from './src/screens/SettingsScreen';
 import {WatchlistScreen} from './src/screens/WatchlistScreen';
 import {colors, formatPrice} from './src/theme';
 
+/** WS 인증 거절 → 토큰 갱신 최소 간격 */
+const AUTH_RETRY_MS = 30_000;
+
 function useSymbols() {
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -107,10 +110,15 @@ function Main({userName}: {userName: string}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 서버가 WS 인증을 거절하면(토큰 만료: 백그라운드에서 갱신 타이머가 늦은 경우 등) 토큰을 갱신해 다시 인증
+  // 서버가 WS 인증을 거절하면(토큰 만료: 백그라운드에서 갱신 타이머가 늦은 경우 등) 토큰을 갱신해 다시 인증.
+  // 새 토큰도 거절되는 상황(서버 간 비밀 키 불일치 등)에서 갱신이 끝없이 돌지 않게 30초에 한 번만
   useEffect(() => {
+    let last = 0;
     const sub = hogaCore.onAuthRejected(() => {
-      if (session.getState().status === 'signedIn') void session.tokens.refresh();
+      const now = Date.now();
+      if (now - last < AUTH_RETRY_MS || session.getState().status !== 'signedIn') return;
+      last = now;
+      void session.tokens.refresh();
     });
     return () => sub.remove();
   }, []);
