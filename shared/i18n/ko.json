@@ -156,5 +156,17 @@
   "web.notices.category.event": "이벤트",
   "web.notices.empty": "공지가 없습니다",
   "web.notices.back": "‹ 목록",
-  "web.notices.search": "검색"
+  "web.notices.search": "검색",
+
+  "settings.bench": "성능 실험: JS 경유 vs C++ 직접",
+  "bench.title": "성능 실험",
+  "bench.modeCpp": "C++ 직접 + pull",
+  "bench.modeJs": "JS 경유(매 틱 이벤트)",
+  "bench.jsFps": "JS FPS",
+  "bench.lag": "JS 지연 평균/최대(ms)",
+  "bench.renders": "초당 렌더",
+  "bench.received": "초당 수신 메시지",
+  "bench.run": "{n}초 측정",
+  "bench.running": "측정 중… {n}",
+  "bench.hint": "관리 콘솔에서 시세 속도를 올린 뒤 두 모드를 각각 측정하세요"
 }

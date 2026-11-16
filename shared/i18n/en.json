@@ -156,5 +156,17 @@
   "web.notices.category.event": "Event",
   "web.notices.empty": "No notices",
   "web.notices.back": "‹ List",
-  "web.notices.search": "Search"
+  "web.notices.search": "Search",
+
+  "settings.bench": "Benchmark: via JS vs C++ direct",
+  "bench.title": "Benchmark",
+  "bench.modeCpp": "C++ direct + pull",
+  "bench.modeJs": "Via JS (event per tick)",
+  "bench.jsFps": "JS FPS",
+  "bench.lag": "JS lag avg/max (ms)",
+  "bench.renders": "Renders / s",
+  "bench.received": "Messages / s",
+  "bench.run": "Measure {n}s",
+  "bench.running": "Measuring… {n}",
+  "bench.hint": "Raise the tick rate in the admin console, then measure each mode"
 }

@@ -1,0 +1,115 @@
+{
+  "platform": "android",
+  "device": "emulator-5554",
+  "at": "2026-11-16T01:06:24.770Z",
+  "results": [
+    {
+      "level": "base",
+      "mode": "cpp",
+      "sec": 10,
+      "fps": 30,
+      "lagAvg": 17,
+      "lagMax": 30,
+      "renders": 12,
+      "bridged": 0,
+      "received": 96,
+      "cpuPct": 18,
+      "ui": {
+        "frames": 227,
+        "jankyPct": 48.9,
+        "p90Ms": 19,
+        "p99Ms": 20
+      }
+    },
+    {
+      "level": "base",
+      "mode": "js",
+      "sec": 10,
+      "fps": 30,
+      "lagAvg": 17,
+      "lagMax": 24,
+      "renders": 12,
+      "bridged": 101,
+      "received": 99,
+      "cpuPct": 19,
+      "ui": {
+        "frames": 223,
+        "jankyPct": 49.33,
+        "p90Ms": 18,
+        "p99Ms": 20
+      }
+    },
+    {
+      "level": "high",
+      "mode": "cpp",
+      "sec": 10,
+      "fps": 30,
+      "lagAvg": 17,
+      "lagMax": 28,
+      "renders": 12,
+      "bridged": 0,
+      "received": 1808,
+      "cpuPct": 34,
+      "ui": {
+        "frames": 244,
+        "jankyPct": 48.36,
+        "p90Ms": 18,
+        "p99Ms": 25
+      }
+    },
+    {
+      "level": "high",
+      "mode": "js",
+      "sec": 10,
+      "fps": 30,
+      "lagAvg": 17,
+      "lagMax": 29,
+      "renders": 85,
+      "bridged": 1804,
+      "received": 1807,
+      "cpuPct": 111,
+      "ui": {
+        "frames": 614,
+        "jankyPct": 8.63,
+        "p90Ms": 17,
+        "p99Ms": 18
+      }
+    },
+    {
+      "level": "extreme",
+      "mode": "cpp",
+      "sec": 10,
+      "fps": 58,
+      "lagAvg": 17,
+      "lagMax": 78,
+      "renders": 13,
+      "bridged": 0,
+      "received": 5374,
+      "cpuPct": 51,
+      "ui": {
+        "frames": 242,
+        "jankyPct": 48.35,
+        "p90Ms": 17,
+        "p99Ms": 18
+      }
+    },
+    {
+      "level": "extreme",
+      "mode": "js",
+      "sec": 10,
+      "fps": 29,
+      "lagAvg": 17,
+      "lagMax": 37,
+      "renders": 76,
+      "bridged": 5391,
+      "received": 5382,
+      "cpuPct": 165,
+      "ui": {
+        "frames": 692,
+        "jankyPct": 0.58,
+        "p90Ms": 26,
+        "p99Ms": 31
+      }
+    }
+  ]
+}

@@ -87,6 +87,9 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   using StateListener = std::function<void(ConnectionState state, std::uint32_t attempt)>;
   // 내 주문 알림(JSON 원문). 빈도가 낮아 JS로 바로 밀어 준다(시세와 달리 push).
   using UserEventListener = std::function<void(const std::string& json)>;
+  // 비교 실험용: 받은 시세 메시지(snap·delta·trade) 원문을 그대로 넘긴다.
+  // 앱 기본 경로는 이걸 쓰지 않는다("JS 경유" 버전을 일부러 만들어 C++ 직접 + pull과 비교할 때만 켠다).
+  using MarketTapListener = std::function<void(const std::string& json)>;
 
   static std::shared_ptr<MarketClient> create(std::shared_ptr<ITransport> transport,
                                               MarketClientOptions options,
@@ -98,6 +101,8 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   // 로그인한 사용자의 액세스 토큰. 연결될 때마다 구독보다 먼저 인증한다. 빈 문자열이면 인증하지 않는다.
   void setAuthToken(std::string token);
   void setUserEventListener(UserEventListener listener);
+  // 빈 함수를 넘기면 끈다
+  void setMarketTapListener(MarketTapListener listener);
 
   void subscribe(const std::vector<std::string>& symbols);
   void unsubscribe(const std::vector<std::string>& symbols);
@@ -111,7 +116,11 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   ClientStats stats() const;
 
   // attempt번째(1부터) 재연결 전 대기 시간. [0, min(max, base·2^(attempt-1))) 범위의 무작위 값.
+  // 서버가 재접속 창을 알려 줬으면(1012 close reason의 retry-window) 상한은 적어도 그 창이다.
   std::chrono::milliseconds backoffDelay(std::uint32_t attempt) const;
+
+  // close reason에서 "retry-window=<ms>"를 읽는다. 없거나 틀리면 0
+  static std::chrono::milliseconds parseRetryWindow(std::string_view reason);
 
  private:
   struct SymbolData {
@@ -146,12 +155,15 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   MarketClientOptions options_;
   StateListener listener_;
   UserEventListener userListener_;
+  MarketTapListener tapListener_;
   std::string authToken_;
 
   std::map<std::string, SymbolData, std::less<>> symbols_;
   ConnectionState state_{ConnectionState::Idle};
   std::uint64_t generation_{0};
   ClientStats stats_;
+  // 서버가 알려 준 재접속 창. 다시 연결되면 0으로 돌아간다
+  std::chrono::milliseconds retryWindow_{0};
 };
 
 }  // namespace hoga

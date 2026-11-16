@@ -42,7 +42,7 @@ class FakeTransport : public hoga::ITransport {
 
   void open() { cb.onOpen(); }
   void message(const std::string& text) { cb.onMessage(text); }
-  void serverClose(int code) { cb.onClose(code, "bye"); }
+  void serverClose(int code, const std::string& reason = "bye") { cb.onClose(code, reason); }
   void runTimers() {
     auto pending = std::move(timers);
     timers.clear();
@@ -183,6 +183,44 @@ TEST(MarketClient, BackoffGrowsAndIsCapped) {
   EXPECT_EQ(zero.client->backoffDelay(5), 0ms);
 }
 
+TEST(MarketClient, ParsesRetryWindowFromCloseReason) {
+  EXPECT_EQ(MarketClient::parseRetryWindow("admin disconnect; retry-window=5000"), 5000ms);
+  EXPECT_EQ(MarketClient::parseRetryWindow("retry-window=500"), 500ms);
+  EXPECT_EQ(MarketClient::parseRetryWindow("bye"), 0ms);
+  EXPECT_EQ(MarketClient::parseRetryWindow("retry-window=abc"), 0ms);
+  EXPECT_EQ(MarketClient::parseRetryWindow("retry-window=99999999999999"), 9'999'999ms);  // 7자리까지만
+}
+
+TEST(MarketClient, ServiceRestartSpreadsReconnectsOverServerWindow) {
+  Fixture f(/*random=*/0.5);
+  f.client->start();
+  f.transport->open();
+  // 서버가 5,000명을 끊으며 5초 창을 알려 줌 → 첫 재접속은 [0, 5s) (기본은 [0, 0.5s))
+  f.transport->serverClose(1012, "admin disconnect; retry-window=5000");
+  ASSERT_EQ(f.transport->timers.size(), 1u);
+  EXPECT_EQ(f.transport->timers[0].delay, 2'500ms);
+  // 다시 실패하면 지수 백오프와 창 중 큰 값
+  f.transport->runTimers();
+  f.transport->serverClose(1006);
+  EXPECT_EQ(f.transport->timers.back().delay, 2'500ms);  // max(1s, 5s) × 0.5
+  // 연결되면 창은 사라진다
+  f.transport->runTimers();
+  f.transport->open();
+  f.transport->serverClose(1006);
+  EXPECT_EQ(f.transport->timers.back().delay, 250ms);
+
+  // 1012가 아니면 reason을 따르지 않고, 지나치게 큰 창은 backoffMax(30s)로 자른다
+  Fixture g(/*random=*/0.5);
+  g.client->start();
+  g.transport->open();
+  g.transport->serverClose(1001, "retry-window=5000");
+  EXPECT_EQ(g.transport->timers.back().delay, 250ms);
+  g.transport->runTimers();
+  g.transport->open();
+  g.transport->serverClose(1012, "retry-window=600000");
+  EXPECT_EQ(g.transport->timers.back().delay, 15'000ms);
+}
+
 TEST(MarketClient, IgnoresCallbacksFromOldConnection) {
   Fixture f;
   f.client->subscribe({"000001"});
@@ -288,6 +326,30 @@ TEST(MarketClient, ForwardsOrderEventsToListener) {
   f.transport->message(event);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0], event);
+}
+
+TEST(MarketClient, MarketTapSeesEveryMarketMessageOutsideTheLock) {
+  Fixture f;
+  std::vector<std::string> tapped;
+  f.client->setMarketTapListener([&](const std::string& json) {
+    tapped.push_back(json);
+    // 잠금 밖에서 불리므로 여기서 다시 읽어도 교착되지 않는다
+    EXPECT_TRUE(f.client->book("000001", 1).subscribed);
+  });
+  f.client->subscribe({"000001"});
+  f.client->start();
+  f.transport->open();
+  f.transport->message(snap(10, 71'200, 100));
+  f.transport->message(delta(11, 71'200, 90));
+  f.transport->message(R"({"t":"trade","sym":"000001","ts":1,"px":71200,"qty":3,"aggr":"B"})");
+  f.transport->message(R"({"t":"delta","sym":"999999","seq":1,"ts":1,"side":"B","px":1,"qty":1})");  // 구독 안 함
+  f.transport->message(R"({"t":"pong","ts":1})");
+  f.transport->message("not json");
+  EXPECT_EQ(tapped.size(), 3u);
+
+  f.client->setMarketTapListener({});  // 끄기
+  f.transport->message(delta(12, 71'200, 80));
+  EXPECT_EQ(tapped.size(), 3u);
 }
 
 TEST(MarketClient, BuildsCandlesFromHistoryAndLiveTrades) {

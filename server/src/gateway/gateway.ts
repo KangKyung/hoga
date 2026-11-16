@@ -21,6 +21,7 @@ type GatewayConfig = Pick<
   | 'WS_MSG_RATE_PER_SEC'
   | 'WS_SOFT_BUFFER_BYTES'
   | 'WS_HARD_BUFFER_BYTES'
+  | 'WS_RECONNECT_ACCEPT_PER_SEC'
 >;
 
 /** 액세스 토큰 → 사용자 ID. 틀리거나 만료면 undefined */
@@ -42,6 +43,17 @@ interface Client {
 export const CLOSE_SERVICE_RESTART = 1012;
 /** 송신 버퍼 초과 */
 export const CLOSE_TRY_AGAIN_LATER = 1013;
+
+/**
+ * 1012로 한꺼번에 끊을 때 close reason에 실어 보내는 재접속 창(ms).
+ * 클라이언트는 첫 재접속을 [0, 창) 사이 무작위로 흩는다. 창은 "끊는 연결 수 ÷ 초당 받아들일 재접속 수"라
+ * 접속자가 많을수록 넓어진다(5,000명이 0.5초 안에 몰리면 OS의 accept 대기열이 넘쳐 연결이 실패한다).
+ */
+export function reconnectWindowMs(connections: number, acceptPerSec: number): number {
+  const ms = Math.ceil((connections / Math.max(1, acceptPerSec)) * 1000);
+  return Math.min(30_000, Math.max(500, ms));
+}
+export const retryReason = (base: string, windowMs: number) => `${base}; retry-window=${windowMs}`;
 
 /**
  * 시세 팬아웃 게이트웨이. 상태를 갖지 않아 여러 대로 늘릴 수 있다.
@@ -98,7 +110,8 @@ export class Gateway {
    */
   disconnectAll(): number {
     const count = this.clients.size;
-    for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, 'admin disconnect');
+    const reason = retryReason('admin disconnect', reconnectWindowMs(count, this.config.WS_RECONNECT_ACCEPT_PER_SEC));
+    for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, reason);
     return count;
   }
 
@@ -109,7 +122,8 @@ export class Gateway {
     clearInterval(this.heartbeat);
     this.unsubscribeBus();
     this.unsubscribeUsers();
-    for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, 'service restart');
+    const reason = retryReason('service restart', reconnectWindowMs(this.clients.size, this.config.WS_RECONNECT_ACCEPT_PER_SEC));
+    for (const client of this.clients) client.ws.close(CLOSE_SERVICE_RESTART, reason);
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
   }
 

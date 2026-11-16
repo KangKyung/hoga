@@ -34,9 +34,14 @@ class NativeHogaCore : public NativeHogaCoreCxxSpec<NativeHogaCore> {
   jsi::Array getTrades(jsi::Runtime& rt, jsi::String symbol, double limit);
   jsi::Object getStats(jsi::Runtime& rt);
 
+  void setMarketTap(jsi::Runtime& rt, bool enabled);
+
  private:
+  void applyMarketTap();
+
   std::shared_ptr<hoga::MarketClient> client_;
   std::string authToken_;
+  bool marketTap_ = false;
   // 모듈이 살아 있는 동안만 유효한 표식. 다른 스레드의 콜백은 JS 스레드로 넘어온 뒤 이것을 확인한다.
   std::shared_ptr<int> alive_ = std::make_shared<int>(0);
 };

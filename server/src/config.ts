@@ -25,6 +25,12 @@ const schema = z.object({
   WS_SOFT_BUFFER_BYTES: z.coerce.number().int().min(1024).default(512 * 1024),
   /** 이만큼 쌓이면 연결을 끊는다(1013 Try Again Later) */
   WS_HARD_BUFFER_BYTES: z.coerce.number().int().min(1024).default(1024 * 1024),
+  /**
+   * 한꺼번에 끊을 때(1012) 초당 받아들일 재접속 수. 재접속 창 = 연결 수 ÷ 이 값(0.5~30초).
+   * 기본 300은 맥북(M4) 한 대에서 5,000명·초당 약 10만 메시지를 보내면서 accept 대기열(128)이 넘치지 않은 값(k6 측정).
+   * 1,000이면 재접속의 14%가 연결 시간 초과로 실패했다.
+   */
+  WS_RECONNECT_ACCEPT_PER_SEC: z.coerce.number().int().min(10).default(300),
 
   /** 멱등 키 보관 시간 */
   IDEMPOTENCY_TTL_MS: z.coerce.number().int().min(1000).default(24 * 60 * 60 * 1000),

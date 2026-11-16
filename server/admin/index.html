@@ -93,6 +93,12 @@
             <small class="mute">짧을수록 시세가 빨라짐(부하 시연). 0이면 멈춤</small>
           </label>
 
+          <label class="row">
+            <span>주기당 주문 횟수 <b class="mono">× {{ vm.form.simBurst }}</b></span>
+            <input type="range" min="1" max="50" step="1" ng-model="vm.form.simBurst" ng-change="vm.dirty = true" />
+            <small class="mute">10 ms × 10회 ≈ 종목당 초당 1,000번 → "JS 경유 vs C++ 직접" 실험용</small>
+          </label>
+
           <div class="buttons">
             <button type="button" class="primary" ng-disabled="!vm.dirty || vm.busy" ng-click="vm.applyFaults()">적용</button>
             <button type="button" ng-disabled="vm.busy" ng-click="vm.resetFaults()">모두 정상으로</button>

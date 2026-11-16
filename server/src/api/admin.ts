@@ -25,6 +25,8 @@ const faultsBody = z
     dropSeqRate: z.number().min(0).max(0.5).optional(),
     orderDelayMs: z.number().int().min(0).max(30_000).optional(),
     simIntervalMs: z.number().int().min(0).max(5_000).optional(),
+    /** 주기마다 종목별 모의 주문 횟수(부하 실험용) */
+    simBurst: z.number().int().min(1).max(50).optional(),
   })
   .strict();
 
@@ -86,10 +88,12 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): void
       scope.put('/faults', async (request, reply) => {
         const parsed = faultsBody.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST' });
-        const { dropSeqRate, orderDelayMs, simIntervalMs } = parsed.data;
+        const { dropSeqRate, orderDelayMs, simIntervalMs, simBurst } = parsed.data;
         if (dropSeqRate !== undefined) market.setDropSeqRate(dropSeqRate);
         if (orderDelayMs !== undefined) faults.orderDelayMs = orderDelayMs;
-        if (simIntervalMs !== undefined) market.startSimulator(simIntervalMs);
+        if (simIntervalMs !== undefined || simBurst !== undefined) {
+          market.startSimulator(simIntervalMs ?? market.faults.simIntervalMs, simBurst);
+        }
         metrics.inc('hoga_admin_actions_total', { action: 'faults' });
         request.log.warn({ change: parsed.data }, 'admin: faults changed');
         return { ...market.faults, orderDelayMs: faults.orderDelayMs };

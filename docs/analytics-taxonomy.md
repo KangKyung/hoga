@@ -33,7 +33,7 @@
 | 이벤트 | 보내는 곳 | 매개변수 | 언제 |
 |---|---|---|---|
 | `login` | 앱 | `method`(password·biometric), `lock_enabled` | 로그인 성공 |
-| `screen_view` | 앱·웹 | `screen_name`(watchlist·quote·settings·notices / stock_info·notice_detail) | 화면 진입 |
+| `screen_view` | 앱·웹 | `screen_name`(watchlist·quote·settings·bench·notices / stock_info·notice_detail) | 화면 진입 |
 | `select_symbol` | 앱 | `symbol` | 관심종목에서 종목 선택 |
 | `switch_quote_tab` | 앱 | `symbol`, `tab`(book·chart·info) | 호가·차트·정보 탭 전환 |
 | `change_chart_interval` | 앱 | `symbol`, `interval`(1m·5m) | 차트 봉 간격 변경 |

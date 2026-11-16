@@ -101,7 +101,7 @@
         vm.token = adminAuth.get();
         vm.tokenInput = '';
         vm.state = { counters: {}, symbols: [], faults: {} };
-        vm.form = { dropSeqRate: 0, orderDelayMs: 0, simIntervalMs: 100 };
+        vm.form = { dropSeqRate: 0, orderDelayMs: 0, simIntervalMs: 100, simBurst: 1 };
         vm.dirty = false;
         vm.busy = false;
         vm.connected = false;
@@ -109,6 +109,7 @@
         vm.lastAction = null;
         vm.simOptions = [
           { value: 0, label: '멈춤' },
+          { value: 10, label: '10 ms (부하 실험)' },
           { value: 20, label: '20 ms (매우 빠름)' },
           { value: 50, label: '50 ms' },
           { value: 100, label: '100 ms (기본)' },
@@ -142,6 +143,7 @@
                 dropSeqRate: state.faults.dropSeqRate,
                 orderDelayMs: state.faults.orderDelayMs,
                 simIntervalMs: state.faults.simIntervalMs,
+                simBurst: state.faults.simBurst,
               };
             }
           }, function (response) {
@@ -204,10 +206,11 @@
               dropSeqRate: Number(vm.form.dropSeqRate),
               orderDelayMs: Number(vm.form.orderDelayMs),
               simIntervalMs: Number(vm.form.simIntervalMs),
+              simBurst: Number(vm.form.simBurst),
             })
             .then(function (applied) {
               vm.dirty = false;
-              vm.lastAction = '적용됨: 누락 ' + (applied.dropSeqRate * 100).toFixed(1) + '%, 주문 지연 ' + applied.orderDelayMs + 'ms, 주기 ' + applied.simIntervalMs + 'ms';
+              vm.lastAction = '적용됨: 누락 ' + (applied.dropSeqRate * 100).toFixed(1) + '%, 주문 지연 ' + applied.orderDelayMs + 'ms, 주기 ' + applied.simIntervalMs + 'ms × ' + applied.simBurst;
             }, fail('적용하지 못했습니다'))
             .finally(function () {
               vm.busy = false;
@@ -215,7 +218,7 @@
         };
 
         vm.resetFaults = function () {
-          vm.form = { dropSeqRate: 0, orderDelayMs: 0, simIntervalMs: 100 };
+          vm.form = { dropSeqRate: 0, orderDelayMs: 0, simIntervalMs: 100, simBurst: 1 };
           vm.dirty = true;
           vm.applyFaults();
         };

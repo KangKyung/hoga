@@ -58,6 +58,8 @@ export class Market {
   private readonly listeners = new Set<ExecutionListener>();
   private dropSeqRate: number;
   private simIntervalMs = 0;
+  /** 주기마다 종목별 모의 주문 횟수. 부하 실험에서 초당 틱 수를 올릴 때 쓴다(10ms × 10회 ≈ 종목당 초당 1,000회) */
+  private simBurst = 1;
   private stopSim: () => void = () => {};
   private readonly random: () => number;
   private readonly now: () => number;
@@ -136,7 +138,7 @@ export class Market {
   // ---- 관리 콘솔(장애·부하 시연)용 제어 ----
 
   get faults() {
-    return { dropSeqRate: this.dropSeqRate, simIntervalMs: this.simIntervalMs };
+    return { dropSeqRate: this.dropSeqRate, simIntervalMs: this.simIntervalMs, simBurst: this.simBurst };
   }
 
   setDropSeqRate(rate: number): void {
@@ -174,16 +176,22 @@ export class Market {
     return result;
   }
 
-  /** 모의 주문 발생기. 종목마다 intervalMs 주기로 호가를 만들고 가끔 체결시킨다. */
-  startSimulator(intervalMs: number): () => void {
+  /**
+   * 모의 주문 발생기. 종목마다 intervalMs 주기로 burst번 호가를 만들고 가끔 체결시킨다.
+   * burst를 생략하면 지금 값을 유지한다.
+   */
+  startSimulator(intervalMs: number, burst?: number): () => void {
     this.stopSim();
     this.simIntervalMs = Math.max(0, intervalMs);
+    if (burst !== undefined) this.simBurst = Math.min(50, Math.max(1, Math.floor(burst)));
     if (this.simIntervalMs <= 0) {
       this.stopSim = () => {};
       return () => {};
     }
     const timer = setInterval(() => {
-      for (const state of this.states.values()) this.simulateOnce(state);
+      for (let i = 0; i < this.simBurst; i++) {
+        for (const state of this.states.values()) this.simulateOnce(state);
+      }
     }, this.simIntervalMs);
     timer.unref();
     const stop = () => clearInterval(timer);

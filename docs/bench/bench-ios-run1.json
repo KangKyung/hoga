@@ -1,0 +1,79 @@
+{
+  "platform": "ios",
+  "device": "iPhone 17 Pro",
+  "at": "2026-11-16T01:04:51.324Z",
+  "results": [
+    {
+      "level": "base",
+      "mode": "cpp",
+      "sec": 10,
+      "fps": 60,
+      "lagAvg": 12,
+      "lagMax": 17,
+      "renders": 12,
+      "bridged": 0,
+      "received": 93,
+      "cpuPct": 35
+    },
+    {
+      "level": "base",
+      "mode": "js",
+      "sec": 10,
+      "fps": 60,
+      "lagAvg": 12,
+      "lagMax": 25,
+      "renders": 14,
+      "bridged": 98,
+      "received": 98,
+      "cpuPct": 36
+    },
+    {
+      "level": "high",
+      "mode": "cpp",
+      "sec": 10,
+      "fps": 60,
+      "lagAvg": 13,
+      "lagMax": 18,
+      "renders": 13,
+      "bridged": 0,
+      "received": 1803,
+      "cpuPct": 51
+    },
+    {
+      "level": "high",
+      "mode": "js",
+      "sec": 10,
+      "fps": 57,
+      "lagAvg": 13,
+      "lagMax": 62,
+      "renders": 179,
+      "bridged": 1801,
+      "received": 1808,
+      "cpuPct": 136
+    },
+    {
+      "level": "extreme",
+      "mode": "cpp",
+      "sec": 10,
+      "fps": 60,
+      "lagAvg": 12,
+      "lagMax": 18,
+      "renders": 13,
+      "bridged": 0,
+      "received": 5428,
+      "cpuPct": 72
+    },
+    {
+      "level": "extreme",
+      "mode": "js",
+      "sec": 10,
+      "fps": 40,
+      "lagAvg": 22,
+      "lagMax": 165,
+      "renders": 192,
+      "bridged": 5410,
+      "received": 5468,
+      "cpuPct": 180
+    }
+  ]
+}

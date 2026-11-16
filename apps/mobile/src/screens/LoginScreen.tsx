@@ -73,7 +73,7 @@ export function LoginScreen({state}: {state: Extract<SessionState, {status: 'sig
             <Text style={styles.primaryText}>{t('login.unlock', {method: method(biometry)})}</Text>
           )}
         </Pressable>
-        <Pressable style={styles.link} onPress={() => run(() => session.logout())}>
+        <Pressable testID="otherAccount" style={styles.link} onPress={() => run(() => session.logout())}>
           <Text style={styles.linkText}>{t('login.otherAccount')}</Text>
         </Pressable>
       </View>

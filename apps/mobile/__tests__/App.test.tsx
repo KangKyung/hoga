@@ -5,6 +5,9 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 
+// 화면 흐름 시험은 CI에서 iOS·Android 빌드와 동시에 돌아 기본 5초가 모자랄 수 있다
+jest.setTimeout(30_000);
+
 // Jest에는 네이티브 런타임이 없으므로 TurboModule을 목으로 대체한다.
 // 실제 C++·네이티브 동작은 core/(GoogleTest)·서버 통합 테스트·기기 실행으로 검증한다.
 const mockBook = {
@@ -22,6 +25,8 @@ const mockBook = {
   lastUpdateMs: Date.now(),
 };
 
+/** "JS 경유" 실험 모드가 등록한 시세 리스너 */
+const mockMarketListeners: Array<(json: string) => void> = [];
 jest.mock('../specs/NativeHogaCore', () => ({
   __esModule: true,
   default: {
@@ -41,6 +46,13 @@ jest.mock('../specs/NativeHogaCore', () => ({
     getStats: () => ({state: 'open', attempt: 0, messages: 1, gaps: 0, resyncs: 0, reconnects: 0, parseErrors: 0, lastError: ''}),
     onConnectionState: () => ({remove: jest.fn()}),
     onOrderEvent: () => ({remove: jest.fn()}),
+    setMarketTap: jest.fn(),
+    onMarketMessage: (listener: (json: string) => void) => {
+      mockMarketListeners.push(listener);
+      return {
+        remove: () => mockMarketListeners.splice(mockMarketListeners.indexOf(listener), 1),
+      };
+    },
   },
 }));
 
@@ -108,6 +120,7 @@ beforeEach(() => {
     if (url.endsWith('/symbols')) return respond(200, symbols);
     if (url.endsWith('/auth/login')) return respond(200, tokens);
     if (url.includes('/orders')) return respond(200, []);
+    if (url.includes('/book/000001')) return respond(200, {t: 'snap', sym: '000001', seq: 100, ts: 0, bids: [[70_000, 5]], asks: [[70_100, 7]]});
     return respond(404, {});
   }) as unknown as typeof fetch;
 });
@@ -265,6 +278,46 @@ test('settings: switching to Indonesian changes text and number grouping and is 
   const texts = r.root.findAllByType(require('react-native').Text).map(n => [n.props.children].flat().join(''));
   expect(texts).toContain('Antrean');
   expect(texts).toContain('71.300');
+
+  await ReactTestRenderer.act(async () => r.unmount());
+});
+
+test('bench: switching to the JS-routed mode taps every market message and renders from the JS book', async () => {
+  const r = await renderSignedIn();
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'openSettings'}).props.onPress();
+  });
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'openBench'}).props.onPress();
+  });
+  const prices = () =>
+    r.root
+      .findByProps({testID: 'bench-book'})
+      .findAllByType(require('react-native').Text)
+      .map(n => [n.props.children].flat().join(''));
+  // 기본은 C++ 직접 + pull(목 장부)
+  expect(prices()).toContain('71,300');
+  expect(NativeHogaCore.setMarketTap).not.toHaveBeenCalled();
+
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'bench-mode-js'}).props.onPress();
+    await flush();
+  });
+  expect(NativeHogaCore.setMarketTap).toHaveBeenLastCalledWith(true);
+  expect(mockMarketListeners).toHaveLength(1);
+  // 처음엔 HTTP 스냅샷(seq 100), 다음 delta는 JS 장부에 바로 반영
+  expect(prices()).toContain('70,100');
+  await ReactTestRenderer.act(async () => {
+    mockMarketListeners[0]!('{"t":"delta","sym":"000001","seq":101,"ts":1,"side":"A","px":70200,"qty":9}');
+  });
+  expect(prices()).toContain('70,200');
+
+  // 나가면 탭을 끈다
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'back'}).props.onPress();
+  });
+  expect(NativeHogaCore.setMarketTap).toHaveBeenLastCalledWith(false);
+  expect(mockMarketListeners).toHaveLength(0);
 
   await ReactTestRenderer.act(async () => r.unmount());
 });

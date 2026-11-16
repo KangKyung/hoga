@@ -14,7 +14,68 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | M2 | 앱 실시간 호가 (C++ TurboModule + 플랫폼 소켓, JNI · Obj-C++) | 완료 |
 | M3 | 로그인 · 주문 · 체결 알림 · 보안 저장소 · 기기 보안 신호 | 완료 |
 | M4 | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | 완료 |
-| **M5** | 웹 화면(HTML/JS·AngularJS) + 웹뷰 브리지 · AngularJS 관리 콘솔 · 분석 이벤트 분류표 · ko/en/id/th 현지화 | **완료** |
+| M5 | 웹 화면(HTML/JS·AngularJS) + 웹뷰 브리지 · AngularJS 관리 콘솔 · 분석 이벤트 분류표 · ko/en/id/th 현지화 | 완료 |
+| **M6** | Jenkins 병렬 파이프라인 · Appium 두 플랫폼 E2E · k6 부하·장애 · "JS 경유 vs C++ 직접" 비교 실험 | **완료** |
+
+### M6 비교 실험 — 고빈도 시세를 JS로 보내면 무엇이 무너지나
+
+![JS 경유 vs C++ 직접](docs/m6-bench.svg)
+
+같은 호가 표(매도 10 + 매수 10)를 두 경로로 그리고, 서버 시세 속도를 세 단계로 올리며 10초씩 두 번 쟀습니다. 측정은 Appium이 자동으로 합니다(`e2e/specs/bench.e2e.ts`, 원자료 `docs/bench/*.json`).
+
+| 경로 | 하는 일 |
+|---|---|
+| **C++ 직접 + pull** (앱 실제 경로) | 소켓 → C++ `MarketClient`가 장부 유지 → JS는 초당 12번 `getBook`(JSI 동기 호출) |
+| **JS 경유** (비교용으로 일부러 만든 경로) | 소켓 → C++ → 메시지마다 TurboModule 이벤트 → `JSON.parse` → JS 장부 → `setState` |
+
+| 초당 수신 메시지 | iOS JS FPS (C++ / JS) | iOS JS 최대 지연 ms | iOS 앱 CPU % | Android 앱 CPU % |
+|---|---|---|---|---|
+| 약 95 | 60 / 60 | 18 / 24 | 35 / 36 | 18 / 19 |
+| 약 1,800 | 60 / 55 | 25 / 51 | 54 / **142** | 34 / **92** |
+| 약 5,400 | 60 / **34** | 18 / **177** | 77 / **188** | 54 / **164** |
+
+- 평소 속도에서는 차이가 없습니다. **초당 수천 건이 되면 JS 경유 쪽만 무너집니다**: iOS JS FPS 60 → 34, 버튼 반응에 해당하는 JS 지연 최대 177ms, CPU는 코어 2개 가까이. C++ 경로는 메시지가 57배 늘어도 JS FPS·지연이 그대로이고, 렌더도 초당 12번으로 고정입니다(JS 경유는 초당 180~190번).
+- "JS 지연"은 50ms 타이머가 늦게 불린 정도입니다. 버튼을 눌렀을 때 `onPress`가 기다리는 시간과 성질이 같습니다. 타이머가 화면 주기에 맞춰 불려 한가할 때도 12~17ms가 나옵니다.
+- CPU는 호스트에서 잰 앱 프로세스의 누적 CPU 시간 ÷ 경과 시간(100% = 코어 1개)입니다. 앱 화면 쪽 숫자(JS FPS·지연·렌더·메시지 수)는 앱이 testID로 화면에 내보내고 Appium이 읽습니다.
+- **Android JS FPS는 비교에서 뺐습니다.** 에뮬레이터 화면이 60/30/20Hz를 오가며(`dumpsys display`) 두 모드 모두 30 근처가 나와 경로의 차이가 아니라 화면 주사율을 잽니다. Android는 CPU와 렌더 횟수로 비교합니다.
+- 조건: 맥북 M4(10코어) 한 대, iPhone 17 Pro 시뮬레이터(iOS 26.4), Pixel 9 에뮬레이터(Android 17), RN 0.88 **Debug** 빌드(Hermes). Release·실기기 숫자는 다릅니다.
+- 앱에서 직접 보기: 설정 → "성능 실험", 관리 콘솔에서 주기 10ms · 주기당 횟수를 올린 뒤 두 모드를 각각 측정. [iOS 화면(JS 경유, 초당 5,400건)](docs/m6-ios-bench-js.png)
+
+### M6 검증 결과 (2026-11-16)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| Jenkins | `Jenkinsfile`: Prepare → C++(일반·ASan·TSan) · 서버 · 앱 JS · iOS · Android **병렬** → Appium E2E iOS · Android **병렬** → (선택) 비교 실험 · k6. JUnit 리포트·APK 보관 | **#2 성공 5분 22초**: 빌드·단위 단계 병렬(가장 긴 iOS 66초), E2E iOS 122초 · Android 99초 동시, k6 104초. JUnit **313개 통과 · 실패 0** (C++ 71×3 · 서버 43 · 앱 41 · N-API 8 · E2E 4×2). #1은 iOS·Android 빌드와 동시에 돈 앱 Jest가 5초 제한을 넘겨 실패 → 화면 흐름 시험 제한 30초 · Jest 작업자 2개로 고침 |
+| Appium E2E | WebdriverIO 테스트 **한 벌**을 capability만 바꿔 두 플랫폼에서 실행. ① 로그인 → 호가 → 주문 → 결과 ② 서버 응답 5초 지연 → "확인 중" → 조회로 확정 ③ seq 누락 20% 주입 → 재동기화 횟수 증가 ④ 웹뷰 종목정보의 매수 → 네이티브 주문 창(웹은 주문을 내지 않음) | iOS 4/4 · Android 4/4 |
+| k6 주문 | 초당 200건 × 60초, 10%는 같은 멱등 키로 재전송 | 새 주문 10,906 · 재전송 1,094 → **서버가 만든 주문 10,906(중복 0)**, 재전송 응답 orderId 불일치 0, p99 1.1ms |
+| k6 시세 팬아웃 | 0 → N명 접속 후 유지, 1인당 종목 1~3개 | 아래 표 |
+| k6 연결 끊기 | 5,000명 유지 중 관리 API로 전부 끊기(1012) → 재접속 | 개선 전후 아래 표 |
+| C++ | `MarketClient` 시세 원문 탭(잠금 밖 호출) · 재접속 창 읽기·적용 (코어 71개, +3) | 일반 · ASan · TSan 통과 |
+| 서버 · 앱 | 시세 속도 조절(`simBurst`) · 재접속 창 계산·전송 (vitest 43개), JS 장부·측정기·실험 화면 흐름 (Jest 41개) | 통과 |
+
+**시세 팬아웃** (k6와 서버를 같은 맥에서 실행, 서버 기본 시세 속도)
+
+| 동시 접속 | 연결 성공 | 초당 전달 메시지 | 전달 지연 p95 / p99 |
+|---|---|---|---|
+| 1,000 | 100% | 28,600 | 6 / 14 ms |
+| 3,000 | 100% | 83,600 | 24 / 51 ms |
+| 5,000 | 100% | 92,200 | 44 / 106 ms |
+| 10,000 | **8.7%** | 49,800 | 381 / 4,180 ms |
+
+→ 이 맥 한 대에서는 **5,000명까지 안정, 10,000명에서 무너집니다.** 이때 k6가 코어 4개 이상을 써서 부하 발생기도 한계입니다(처음엔 k6가 메시지마다 `JSON.parse`해서 5,000명에서 먼저 무너졌고, 20개 중 1개만 파싱하게 고쳐 서버 쪽 한계를 보이게 했습니다). 전달 지연 = 서버가 메시지에 찍은 시각 ↔ 받은 시각(같은 기계라 시계가 같음).
+
+### M6에서 찾은 문제 — 5,000명이 한꺼번에 재접속하면
+
+| 5,000명 강제 끊기 후 | 연결 성공 | 실패한 연결 시도 | 복구 시간 중앙값 / p95 / p99 |
+|---|---|---|---|
+| 개선 전: 모두 0~0.5초 안에 재접속 | 87.3% | 1,436 | 0.5 / 23.1 / 28.5 s |
+| 재접속 창 5초(초당 1,000명) | 86.3% | 1,566 | 2.6 / 28.9 / 30.8 s |
+| **재접속 창 17초(초당 300명, 기본값)** | **99.5%** | **47** | 8.3 / 20.7 / 23.4 s |
+
+- **원인**: 모두가 0.5초 안에 다시 붙으면 OS의 accept 대기열(`somaxconn` 128)이 가득 차고(`netstat -L` 128/128), 연결이 `operation timed out`으로 실패합니다. Node 이벤트 루프가 초당 9만 건을 내보내느라 accept가 밀리기 때문입니다. 실패한 클라이언트는 지수 백오프에 걸려 30초 가까이 늦게 돌아옵니다.
+- **개선**: 서버가 1012로 끊을 때 close reason에 **재접속 창**(`retry-window=<ms>` = 끊는 연결 수 ÷ 초당 받아들일 수)을 싣고, C++ `MarketClient`는 첫 재접속을 그 창 안에서 무작위로 고릅니다(이후 백오프도 창보다 좁히지 않음, 상한 30초, 1012일 때만). k6 클라이언트도 같은 규칙입니다.
+- **감수한 것**: 중앙값은 0.5초 → 8초로 늘었습니다. 대신 "대부분 빨리 + 일부는 30초"가 "모두 창 안에서 고르게"로 바뀌어 실패가 1,436 → 47번으로 줄었습니다. 초당 300은 이 맥에서 잰 값이라 `WS_RECONNECT_ACCEPT_PER_SEC`로 바꿀 수 있고, 실제로는 gateway를 늘려 창을 줄입니다.
+
 
 ### M5 검증 결과 (2026-11-15)
 
@@ -213,7 +274,7 @@ hoga/
 │  ├─ src/api/                    # REST: 인증 · 주문 (멱등 키)
 │  ├─ src/auth/                   # HS256 JWT · 사용자 · 리프레시 회전
 │  ├─ src/orders/tracker.ts       # 사용자 주문 상태 · 체결 알림
-│  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현, Redis는 M6)
+│  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현)
 │  ├─ src/api/web.ts              # 웹 화면 정적 제공 · CSP · 번역 · 종목정보 · 공지
 │  ├─ src/api/admin.ts            # 관리 API(장애 주입 · 변동성 · 연결 끊기)
 │  ├─ web/                        # 종목정보(HTML/CSS/JS) · 공지(AngularJS) · 공용 브리지·번역·분석 JS
@@ -227,11 +288,18 @@ hoga/
 │  ├─ src/i18n/                   # 번역 · 숫자 형식 · 서버 번역 갱신
 │  ├─ src/analytics/              # 분류표 기반 이벤트 · 싱크
 │  ├─ src/hooks/                  # usePolled: C++에서 화면 주기로 끌어오기
+│  ├─ src/bench/                  # 비교 실험: JS 장부(JS 경유 경로) · JS FPS·지연 측정기
 │  ├─ src/orders/                 # 주문 상태 머신 · 미확정 주문 기록 · 내 주문
 │  ├─ src/auth/session.ts         # 로그인 · 토큰 회전 · 생체 잠금
 │  ├─ android/.../transport/HogaTransport.kt
 │  ├─ android/.../security/       # Kotlin SecureStoreModule · Java DeviceGuardModule
 │  └─ android/.../chart/          # Kotlin HogaChartView (Canvas) · ViewManager · JNI 선언
+├─ e2e/                           # Appium 3 + WebdriverIO: 테스트 한 벌로 iOS·Android
+│  ├─ specs/flows.e2e.ts          # 주문 · 응답 지연 · seq 누락 · 웹뷰 → 네이티브 주문
+│  └─ specs/bench.e2e.ts          # "JS 경유 vs C++ 직접" 측정 자동화
+├─ loadtest/                      # k6: 주문 멱등성 · 시세 팬아웃 · 연결 끊기 복구, results/
+├─ ci/                            # 단계별 스크립트(Jenkins·터미널 공용) · jenkins/(로컬 Jenkins 설정)
+├─ Jenkinsfile                    # 병렬 파이프라인
 └─ HogaNative.podspec             # iOS: core + turbomodule 소스를 컴파일
 ```
 
@@ -305,7 +373,7 @@ npm test
 | 느린 클라이언트가 서버 메모리를 잡아먹음 | 송신 버퍼가 SOFT(512KB)를 넘으면 그 종목 변경분을 건너뛰고, 버퍼가 비면 **최신 스냅샷 1개**로 따라잡게 함. HARD(1MB) 초과 시 1013으로 종료 |
 | 죽은 연결이 쌓임 | 15초 하트비트 ping, 다음 주기까지 pong 없으면 terminate |
 | 남용 | 메시지 4KB 제한, 연결당 초당 20개(토큰 버킷), 연결당 구독 20종목 |
-| 재시작 때 일제히 재접속 | 종료 시 1012(서비스 재시작) 전송 → 클라이언트는 지터를 둔 백오프로 흩어져 재접속(M2) |
+| 재시작 때 일제히 재접속 | 종료 시 1012(서비스 재시작) + 재접속 창(`retry-window`, 연결 수 ÷ 초당 300) 전송 → 클라이언트는 창 안에서 흩어져 재접속(M6에서 k6로 측정해 추가) |
 | 구독자마다 직렬화 | market이 한 번 직렬화한 문자열을 그대로 전송 |
 
 ## 실행 (전체)
@@ -329,6 +397,27 @@ adb reverse tcp:8080 tcp:8080   # Android 에뮬레이터 → Mac의 서버
 (cd ios && pod install) && npx react-native run-ios
 npx react-native run-android --active-arch-only
 ```
+
+### 자동화 (M6)
+
+```bash
+# Appium E2E: 서버(8080) · Metro(8081) · Appium(4723) · 시뮬레이터/에뮬레이터를 켠 뒤
+cd e2e && npm install && npm run drivers
+npm run appium                     # 다른 터미널
+npm run test:ios                   # 또는 test:android / bench:ios / bench:android
+
+# k6 (별도 서버 8090을 띄워 앱과 섞이지 않게)
+ci/load.sh                         # 또는 k6 run -e BASE=http://localhost:8090 -e VUS=5000 -e CHAOS_AT=90s loadtest/ws-fanout.js
+
+# 로컬 Jenkins: 127.0.0.1:8088, 관리자 admin / 비밀번호는 ~/.hoga-ci/jenkins/hoga-admin-password
+ci/jenkins/start.sh                # 첫 실행은 플러그인 설치 후 스스로 재시작
+ci/jenkins/snapshot.sh             # 지금 작업 트리를 로컬 CI 저장소의 ci 브랜치로(현재 브랜치는 그대로)
+ci/jenkins/build.sh E2E=true BENCH=false LOAD=true
+```
+
+- 단계의 실제 명령은 `ci/*.sh`에 있어 Jenkins 없이도 같은 순서로 돌릴 수 있습니다(`ci/prepare.sh && ci/core.sh` …).
+- E2E는 플랫폼마다 서버를 따로 씁니다(iOS 8080, Android 8091을 `adb reverse tcp:8080 tcp:8091`). 장애 주입이 다른 플랫폼 시험에 섞이지 않게 하기 위해서입니다.
+- Android 17 에뮬레이터는 Metro 기본 주소(10.0.2.2)에 로컬 네트워크 권한이 필요해, 스크립트가 디버그 앱의 Metro 주소를 `localhost:8081`로 바꿉니다.
 
 ### 느린 네트워크에서 설치하기
 
@@ -365,12 +454,16 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 ## 알려진 한계 / 다음 단계
 
 - 호가가격단위 · 가격제한폭은 **간소화한 규칙**입니다. KRX 규정 원문과 대조하고 출처를 남겨야 합니다.
-- 서버의 버스·멱등 저장소는 메모리 구현만 있습니다. 여러 프로세스 확장(Redis Pub/Sub, `SET NX`)은 M6에서 붙입니다.
-- 리프레시 토큰·주문 기록·멱등 키가 서버 메모리에만 있어 서버를 재시작하면 다시 로그인해야 합니다(M6에서 Redis).
+- 서버의 버스·멱등 저장소는 메모리 구현만 있습니다. 여러 프로세스 확장(Redis Pub/Sub, `SET NX`)은 아직 하지 않았습니다(M7 후보). 그래서 부하 시험도 gateway 1대 기준이고, "gateway 1대 장애" 대신 관리 API로 모든 연결을 끊어 재접속을 쟀습니다.
+- 리프레시 토큰·주문 기록·멱등 키가 서버 메모리에만 있어 서버를 재시작하면 다시 로그인해야 합니다.
 - 생체 인증 경로(Face ID·지문)는 시뮬레이터·에뮬레이터에 생체 정보가 등록되지 않아 **기기에서 확인하지 못했습니다**. 생체 없는 경로(일반 Keychain·Keystore 저장, 세션 복원)만 확인했습니다.
 - Android 14+ 화면 캡처 감지(`DETECT_SCREEN_CAPTURE`)는 넣지 않았고 `FLAG_SECURE`로 차단만 합니다.
 - 인증서 고정은 서버가 아직 HTTP라 넣지 않았습니다.
-- 접근성 트리로 화면을 읽는 자동화(uiautomator)는 시세가 계속 바뀌면 동작하지 않습니다 → Appium 단계(M6)에서 테스트 모드를 고려합니다.
+- Appium(UiAutomator2)은 시세가 계속 바뀌는 화면에서 "화면이 멈출 때까지 기다리기"가 끝나지 않아 `waitForIdleTimeout: 0`으로 끕니다. iOS의 "암호를 저장하겠습니까?" 창은 다른 프로세스가 띄워 요소로 잡히지 않아, 테스트가 화면 비율 위치로 "지금 안 함"을 누릅니다(기기 크기가 많이 다르면 고쳐야 함).
+- Android E2E 실패 화면은 `FLAG_SECURE` 때문에 검게 저장됩니다(요소 조작·읽기는 됨).
+- 비교 실험은 Debug 빌드·시뮬레이터/에뮬레이터 숫자입니다. Release 빌드·실기기, UI 스레드 프레임(iOS)은 재지 않았습니다. Android `gfxinfo` 값은 JSON에 남겼지만 에뮬레이터 주사율 변화로 비교에 쓰지 않았습니다.
+- k6와 서버를 같은 맥에서 돌려 서로 CPU를 나눠 씁니다. 숫자는 "맥 한 대" 기준이고 서버만의 한계는 아닙니다.
+- Jenkins는 로컬 한 대(에이전트 없음)이고 SCM 폴링·웹훅 없이 `build.sh`로 실행합니다. Sentry·hoga-cli 배포 도구·Redmine/SVN은 M7 후보입니다.
 - 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용). 재연결 후에도 이전 체결 목록은 그대로 보입니다.
 - 앱의 서버 주소는 `localhost:8080`으로 고정입니다(시뮬레이터·에뮬레이터 개발용).
 - 인증서 고정·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
@@ -383,4 +476,4 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 현지화: 종목 이름은 번역하지 않습니다. 오른쪽에서 왼쪽으로 쓰는 언어(ar)는 아직 대상이 아닙니다. 번역 검수는 원어민 확인을 거치지 않았습니다.
 - 현지화: 가격은 원화·한국 호가단위 그대로이고 자릿수 구분만 언어를 따릅니다. 시장별 호가 정책(루피아·바트)은 C++ 인터페이스로 분리하지 않았습니다.
 - Android 하드웨어 뒤로 가기(`BackHandler`)를 처리하지 않습니다. 화면 안의 ‹ 버튼으로만 이동하고, 웹뷰 안 기록(공지 상세 → 목록)도 웹 화면의 ‹ 버튼으로 돌아갑니다.
-- 다음: **M6** — Jenkins 병렬 파이프라인, Appium 두 플랫폼 E2E, k6 부하·카오스(관리 콘솔 활용), "JS 경유 vs C++ 직접" 비교 실험.
+- 다음: **M7(선택)** — Redis로 gateway 여러 대, hoga-cli 배포 도구(버전·변경 로그·Fastlane), OTP, FCM 푸시, 바이너리 프로토콜 비교.

@@ -156,5 +156,17 @@
   "web.notices.category.event": "กิจกรรม",
   "web.notices.empty": "ไม่มีประกาศ",
   "web.notices.back": "‹ รายการ",
-  "web.notices.search": "ค้นหา"
+  "web.notices.search": "ค้นหา",
+
+  "settings.bench": "ทดสอบประสิทธิภาพ: ผ่าน JS กับ C++ โดยตรง",
+  "bench.title": "ทดสอบประสิทธิภาพ",
+  "bench.modeCpp": "C++ โดยตรง + pull",
+  "bench.modeJs": "ผ่าน JS (อีเวนต์ทุกติก)",
+  "bench.jsFps": "JS FPS",
+  "bench.lag": "ความหน่วง JS เฉลี่ย/สูงสุด (ms)",
+  "bench.renders": "เรนเดอร์ / วินาที",
+  "bench.received": "ข้อความ / วินาที",
+  "bench.run": "วัด {n} วินาที",
+  "bench.running": "กำลังวัด… {n}",
+  "bench.hint": "เพิ่มความเร็วติกในคอนโซลผู้ดูแล แล้ววัดแต่ละโหมด"
 }

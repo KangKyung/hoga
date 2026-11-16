@@ -156,5 +156,17 @@
   "web.notices.category.event": "Acara",
   "web.notices.empty": "Tidak ada pengumuman",
   "web.notices.back": "‹ Daftar",
-  "web.notices.search": "Cari"
+  "web.notices.search": "Cari",
+
+  "settings.bench": "Uji kinerja: lewat JS vs C++ langsung",
+  "bench.title": "Uji kinerja",
+  "bench.modeCpp": "C++ langsung + pull",
+  "bench.modeJs": "Lewat JS (event per tick)",
+  "bench.jsFps": "FPS JS",
+  "bench.lag": "Jeda JS rata-rata/maks (ms)",
+  "bench.renders": "Render / dtk",
+  "bench.received": "Pesan / dtk",
+  "bench.run": "Ukur {n} dtk",
+  "bench.running": "Mengukur… {n}",
+  "bench.hint": "Naikkan kecepatan tick di konsol admin, lalu ukur tiap mode"
 }

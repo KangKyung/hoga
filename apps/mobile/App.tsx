@@ -18,6 +18,7 @@ import {loadSavedLocale} from './src/i18n/persist';
 import {hogaCore, type OrderEvent} from './src/native/hogaCore';
 import {deviceGuard} from './src/native/security';
 import {orderService} from './src/orders/orderService';
+import {BenchScreen} from './src/screens/BenchScreen';
 import {LoginScreen} from './src/screens/LoginScreen';
 import {NoticesScreen} from './src/screens/NoticesScreen';
 import {QuoteScreen} from './src/screens/QuoteScreen';
@@ -66,7 +67,7 @@ function useBanner() {
   return {text, show};
 }
 
-type Route = {name: 'watchlist'} | {name: 'quote'; symbol: SymbolInfo} | {name: 'notices'} | {name: 'settings'};
+type Route = {name: 'watchlist'} | {name: 'quote'; symbol: SymbolInfo} | {name: 'notices'} | {name: 'settings'} | {name: 'bench'};
 
 function Main({userName}: {userName: string}) {
   useI18n(); // 언어가 바뀌면 다시 그린다
@@ -122,7 +123,9 @@ function Main({userName}: {userName: string}) {
       ) : route.name === 'notices' ? (
         <NoticesScreen onBack={home} />
       ) : route.name === 'settings' ? (
-        <SettingsScreen onBack={home} />
+        <SettingsScreen onBack={home} onOpenBench={() => setRoute({name: 'bench'})} />
+      ) : route.name === 'bench' ? (
+        <BenchScreen symbol={symbols[0]?.code ?? '000001'} onBack={() => setRoute({name: 'settings'})} />
       ) : (
         <WatchlistScreen
           userName={userName}

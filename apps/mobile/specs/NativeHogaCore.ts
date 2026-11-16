@@ -43,6 +43,13 @@ export interface Spec extends TurboModule {
   readonly onConnectionState: CodegenTypes.EventEmitter<string>;
   /** 내 주문 상태 변화(JSON 문자열). 빈도가 낮아 push로 받는다 */
   readonly onOrderEvent: CodegenTypes.EventEmitter<string>;
+
+  /**
+   * 비교 실험 전용("JS 경유" 버전): 켜면 시세 메시지(snap·delta·trade) 원문을 매번 JS로 보낸다.
+   * 앱 기본 경로는 끈 상태(C++ 직접 + JSI pull)다.
+   */
+  readonly setMarketTap: (enabled: boolean) => void;
+  readonly onMarketMessage: CodegenTypes.EventEmitter<string>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('NativeHogaCore');

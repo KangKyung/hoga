@@ -1,0 +1,87 @@
+/**
+ * 핵심 사용자 흐름. 같은 파일이 iOS(XCUITest)·Android(UiAutomator2)에서 그대로 돈다.
+ *
+ * 1. 로그인 → 관심종목 → 호가 → 주문 → 체결/접수 확인
+ * 2. 서버 응답 지연 중 주문 → "확인 중" → 조회로 확정(실패로 보지 않음)
+ * 3. seq 누락 주입 → 앱이 감지하고 스냅샷으로 다시 맞춤
+ * 4. 웹뷰 종목정보의 매수 버튼 → 네이티브 주문 창(웹은 주문을 직접 내지 못함)
+ */
+import {admin, byId, exists, goHome, resetFaults, scrollTo, signInFresh, t, tap, tapIfPresent, textOf, waitForText} from '../support/app.js';
+
+const FINAL = [t('order.accepted'), t('order.filled', {filled: ''}).split('(')[0]!, t('order.partial', {filled: '', resting: ''}).split(' ')[0]!];
+const isFinal = (s: string) => FINAL.some(prefix => s.startsWith(prefix.trim()));
+
+describe('Hoga MTS', () => {
+  before(async () => {
+    await resetFaults();
+    await signInFresh();
+  });
+
+  afterEach(async () => {
+    await resetFaults();
+    await tapIfPresent('orderDone', 300);
+    await tapIfPresent('closeOrder', 300);
+    await goHome();
+  });
+
+  it('logs in, opens the order book, places a limit order and sees the result', async () => {
+    await tap('watch-000001');
+    // 실시간 호가가 들어와 현재가가 보인다
+    await waitForText('lastPrice', s => /\d/.test(s), 20_000);
+    await waitForText('statusBadge', s => s.includes(t('status.live')), 20_000, 'status').catch(async () => {
+      // 일부 플랫폼은 배지 묶음의 글자를 못 읽으므로 호가 행이 있으면 통과
+      await byId('buyButton').waitForDisplayed();
+    });
+
+    await tap('buyButton');
+    await byId('submitOrder').waitForDisplayed();
+    await tap('submitOrder');
+    const result = await waitForText('orderProgress', isFinal, 20_000, 'order result');
+    expect(result).not.toContain(t('order.failed', {reason: ''}).trim());
+  });
+
+  it('shows "confirming" when the server is slow, then settles by lookup', async () => {
+    await admin('PUT', '/faults', {orderDelayMs: 5_000});
+    await tap('watch-000001');
+    await tap('sellButton');
+    await tap('submitOrder');
+    // 3초(ORDER_TIMEOUT_MS) 뒤 실패가 아니라 "확인 중"
+    await waitForText('orderProgress', s => s === t('order.confirming'), 10_000, 'confirming');
+    // 서버가 실제로 처리했으므로 조회로 접수/체결이 확정된다
+    await waitForText('orderProgress', isFinal, 25_000, 'settled');
+  });
+
+  it('detects dropped sequence numbers and resyncs from a snapshot', async () => {
+    await tap('watch-000001');
+    await waitForText('lastPrice', s => /\d/.test(s), 20_000);
+    await scrollTo('stats');
+    const before = await textOf('stats');
+    // "seq {seq} · 누락 감지 {gaps} · 재동기화 {resyncs} …" 형식을 번역 파일에서 그대로 만들어 읽는다
+    const pattern = new RegExp(t('quote.stats').replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{(\w+)\}/g, '([\\d,.]+)'));
+    const resyncs = (s: string) => Number((pattern.exec(s)?.[3] ?? 'NaN').replace(/[,.]/g, ''));
+    await admin('PUT', '/faults', {dropSeqRate: 0.2, simIntervalMs: 50});
+    await waitForText('stats', s => resyncs(s) > resyncs(before), 20_000, 'resyncs');
+    await resetFaults();
+    // 다시 실시간으로 돌아온다
+    await browser.pause(1_500);
+    expect(await exists('statusBadge')).toBe(true);
+  });
+
+  it('opens the native order sheet from the web stock-info page', async () => {
+    await tap('watch-000001');
+    await tap('tab-info');
+    // 웹뷰를 감싼 View의 testID는 iOS 접근성 트리에 남지 않아(웹 내용이 대신 노출) 웹 버튼을 바로 기다린다
+    // 웹 화면 버튼은 접근성 트리로 보인다(웹뷰 컨텍스트 전환 없이 두 플랫폼 같은 방법)
+    const buy = driver.isIOS
+      ? $(`-ios predicate string:type == "XCUIElementTypeButton" AND label == "${t('common.buy')}"`)
+      : $(`android=new UiSelector().className("android.widget.Button").text("${t('common.buy')}")`);
+    await buy.waitForDisplayed({timeout: 20_000});
+    // 브리지가 연결돼 버튼이 활성화될 때까지
+    await browser.waitUntil(() => buy.isEnabled(), {timeout: 10_000});
+    await buy.click();
+    await byId('fromWebNotice').waitForDisplayed({timeout: 10_000});
+    expect(await textOf('fromWebNotice')).toBe(t('order.fromWeb'));
+    // 웹은 주문을 직접 내지 않는다: 사용자가 누르기 전까지 주문 결과가 없다
+    expect(await exists('orderProgress', 500)).toBe(false);
+  });
+});

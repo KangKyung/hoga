@@ -1,0 +1,16 @@
+{
+  "sentNew": 10906,
+  "sentRetry": 1094,
+  "serverCreated": 10906,
+  "duplicatesCreated": 0,
+  "replayMismatch": 0,
+  "latency": {
+    "p(95)": 0.95,
+    "p(99)": 1.131,
+    "max": 13.544,
+    "avg": 0.625442999999999,
+    "med": 0.581,
+    "p(90)": 0.84
+  },
+  "failedRate": 0
+}

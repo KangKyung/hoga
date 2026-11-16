@@ -105,6 +105,16 @@ describe('content', () => {
   });
 });
 
+describe('reconnect window', () => {
+  it('widens with the number of clients being dropped and is clamped', async () => {
+    const { reconnectWindowMs } = await import('../src/gateway/gateway.js');
+    expect(reconnectWindowMs(1, 1000)).toBe(500);
+    expect(reconnectWindowMs(5000, 1000)).toBe(5000);
+    expect(reconnectWindowMs(10_000, 500)).toBe(20_000);
+    expect(reconnectWindowMs(1_000_000, 1000)).toBe(30_000);
+  });
+});
+
 describe('admin API', () => {
   it('requires the admin token', async () => {
     const server = await start();
@@ -116,12 +126,31 @@ describe('admin API', () => {
   it('changes faults at runtime and validates input', async () => {
     const server = await start();
     const applied = await admin(server, 'PUT', '/admin/api/faults', { dropSeqRate: 0.05, orderDelayMs: 1500, simIntervalMs: 0 });
-    expect(applied.json()).toEqual({ dropSeqRate: 0.05, orderDelayMs: 1500, simIntervalMs: 0 });
+    expect(applied.json()).toEqual({ dropSeqRate: 0.05, orderDelayMs: 1500, simIntervalMs: 0, simBurst: 1 });
     const state = (await admin(server, 'GET', '/admin/api/state')).json() as { faults: unknown };
-    expect(state.faults).toEqual({ dropSeqRate: 0.05, orderDelayMs: 1500, simIntervalMs: 0 });
+    expect(state.faults).toEqual({ dropSeqRate: 0.05, orderDelayMs: 1500, simIntervalMs: 0, simBurst: 1 });
 
     expect((await admin(server, 'PUT', '/admin/api/faults', { dropSeqRate: 2 })).statusCode).toBe(400);
     expect((await admin(server, 'PUT', '/admin/api/faults', { shell: 'rm -rf' })).statusCode).toBe(400);
+    expect((await admin(server, 'PUT', '/admin/api/faults', { simBurst: 51 })).statusCode).toBe(400);
+  });
+
+  it('raises the tick rate with simBurst (load experiment)', async () => {
+    const server = await start();
+    const deltas = () => server.metrics.sum('hoga_market_deltas_total');
+    const measure = async () => {
+      const before = deltas();
+      await new Promise((r) => setTimeout(r, 300));
+      return deltas() - before;
+    };
+    await admin(server, 'PUT', '/admin/api/faults', { simIntervalMs: 10, simBurst: 1 });
+    const slow = await measure();
+    // 주기를 생략하면 지금 주기(10ms)를 유지하고 횟수만 바꾼다
+    const applied = await admin(server, 'PUT', '/admin/api/faults', { simBurst: 10 });
+    expect(applied.json()).toMatchObject({ simIntervalMs: 10, simBurst: 10 });
+    const fast = await measure();
+    expect(fast).toBeGreaterThan(slow * 4);
+    await admin(server, 'PUT', '/admin/api/faults', { simIntervalMs: 0 });
   });
 
   it('applies the order delay to order responses', async () => {
@@ -156,8 +185,9 @@ describe('admin API', () => {
     const server = await start();
     const ws = new WebSocket(`${server.url().replace('http', 'ws')}/ws`);
     await new Promise((resolve) => ws.once('open', resolve));
-    const closed = new Promise<number>((resolve) => ws.once('close', (code) => resolve(code)));
+    const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])));
     expect((await admin(server, 'POST', '/admin/api/disconnect', {})).json()).toEqual({ closed: 1 });
-    expect(await closed).toBe(1012);
+    // 1012 + 재접속 창(연결 1개면 최소값 0.5초)
+    expect(await closed).toEqual([1012, 'admin disconnect; retry-window=500']);
   });
 });

@@ -148,6 +148,7 @@ void NativeHogaCore::connect(jsi::Runtime& rt, jsi::String wsUrl, jsi::String ht
     });
   });
   if (!authToken_.empty()) client_->setAuthToken(authToken_);
+  applyMarketTap();
   hoga::chartsource::setClient(client_);  // 네이티브 차트가 직접 읽는다
   client_->start();
 }
@@ -212,6 +213,28 @@ jsi::Object NativeHogaCore::getStats(jsi::Runtime& rt) {
   out.setProperty(rt, "parseErrors", static_cast<double>(s.parseErrors));
   out.setProperty(rt, "lastError", str(rt, s.lastError));
   return out;
+}
+
+void NativeHogaCore::setMarketTap(jsi::Runtime& /*rt*/, bool enabled) {
+  marketTap_ = enabled;
+  applyMarketTap();
+}
+
+void NativeHogaCore::applyMarketTap() {
+  if (!client_) return;
+  if (!marketTap_) {
+    client_->setMarketTapListener({});
+    return;
+  }
+  // "JS 경유" 버전: 메시지마다 JS 스레드로 한 번씩 넘긴다. 일반적인 RN 앱이 네이티브 소켓 이벤트를
+  // 받는 방식과 같다(메시지마다 JS 작업 하나 + JSON.parse + 상태 갱신).
+  std::weak_ptr<int> alive = alive_;
+  auto invoker = jsInvoker_;
+  client_->setMarketTapListener([alive, invoker, self = this](const std::string& json) {
+    invoker->invokeAsync([alive, self, json] {
+      if (alive.lock()) self->emitOnMarketMessage(json);
+    });
+  });
 }
 
 }  // namespace facebook::react

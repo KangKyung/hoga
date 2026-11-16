@@ -93,7 +93,8 @@ std::chrono::milliseconds MarketClient::backoffDelay(std::uint32_t attempt) cons
   const Rep max = options_.backoffMax.count();
   Rep cap = base;
   for (std::uint32_t i = 1; i < attempt && cap < max; ++i) cap *= 2;
-  cap = std::min(cap, max);
+  // 서버가 정한 재접속 창보다 좁게 몰리지 않는다(수천 명이 동시에 끊긴 경우)
+  cap = std::min(std::max(cap, static_cast<Rep>(retryWindow_.count())), max);
   const double r = std::clamp(options_.random(), 0.0, 1.0);
   return std::chrono::milliseconds(static_cast<Rep>(r * static_cast<double>(cap)));
 }
@@ -218,12 +219,18 @@ void MarketClient::setUserEventListener(UserEventListener listener) {
   userListener_ = std::move(listener);
 }
 
+void MarketClient::setMarketTapListener(MarketTapListener listener) {
+  std::lock_guard lock(mutex_);
+  tapListener_ = std::move(listener);
+}
+
 void MarketClient::onOpen(std::uint64_t generation) {
   Deferred after;
   {
     std::lock_guard lock(mutex_);
     if (generation != generation_) return;
     stats_.attempt = 0;
+    retryWindow_ = std::chrono::milliseconds{0};
     stats_.authenticated = false;
     setStateLocked(ConnectionState::Open, after);
     // 인증을 구독보다 먼저: 끊긴 동안 생긴 내 주문 변화는 앱이 REST로 다시 조회한다.
@@ -243,6 +250,18 @@ void MarketClient::onOpen(std::uint64_t generation) {
   run(after);
 }
 
+std::chrono::milliseconds MarketClient::parseRetryWindow(std::string_view reason) {
+  constexpr std::string_view key = "retry-window=";
+  const auto at = reason.find(key);
+  if (at == std::string_view::npos) return std::chrono::milliseconds{0};
+  std::int64_t ms = 0;
+  std::size_t digits = 0;
+  for (auto i = at + key.size(); i < reason.size() && reason[i] >= '0' && reason[i] <= '9' && digits < 7; ++i, ++digits) {
+    ms = ms * 10 + (reason[i] - '0');
+  }
+  return std::chrono::milliseconds{digits ? ms : 0};
+}
+
 void MarketClient::onClose(std::uint64_t generation, int code, const std::string& reason) {
   Deferred after;
   {
@@ -257,6 +276,8 @@ void MarketClient::onClose(std::uint64_t generation, int code, const std::string
     }
     ++stats_.attempt;
     ++stats_.reconnects;
+    // 1012(서비스 재시작)일 때만 서버의 재접속 창을 따른다. 상한은 backoffMax
+    if (code == 1012) retryWindow_ = std::min(parseRetryWindow(reason), options_.backoffMax);
     setStateLocked(ConnectionState::Reconnecting, after);
 
     const auto delay = backoffDelay(stats_.attempt);
@@ -336,7 +357,11 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
       while (data.trades.size() > options_.tradeHistory) data.trades.pop_back();
       const auto& t = data.trades.front();
       data.candles->addTrade(t.ts, t.price, t.qty);
+    } else {
+      return;
     }
+    // 잠금 밖에서 부른다(받는 쪽이 book() 등을 다시 불러도 교착되지 않게)
+    if (tapListener_) after.push_back([listener = tapListener_, text] { listener(text); });
   } catch (const json::exception&) {
     // 필드가 없거나 타입이 틀린 메시지. 연결은 유지하고 버린다.
     ++stats_.parseErrors;

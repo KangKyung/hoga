@@ -65,6 +65,9 @@ export const hogaCore = {
 
   onConnectionState: (listener: (state: ConnectionState) => void) =>
     NativeHogaCore.onConnectionState(state => listener(state as ConnectionState)),
+  /** 비교 실험 전용: 켜면 시세 메시지 원문을 매번 JS로 보낸다("JS 경유" 버전) */
+  setMarketTap: (enabled: boolean) => NativeHogaCore.setMarketTap(enabled),
+  onMarketMessage: (listener: (json: string) => void) => NativeHogaCore.onMarketMessage(listener),
   /** 내 주문 변화(서버 order 메시지) */
   onOrderEvent: (listener: (event: OrderEvent) => void) =>
     NativeHogaCore.onOrderEvent(json => {

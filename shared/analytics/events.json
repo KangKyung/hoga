@@ -9,7 +9,7 @@
     },
     "screen_view": {
       "source": ["app", "web"],
-      "params": {"screen_name": "watchlist | quote | settings | stock_info | notices | notice_detail"},
+      "params": {"screen_name": "watchlist | quote | settings | bench | stock_info | notices | notice_detail"},
       "description": "화면 진입(GA4 권장 이벤트)"
     },
     "select_symbol": {

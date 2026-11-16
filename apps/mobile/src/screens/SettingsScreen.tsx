@@ -10,7 +10,7 @@ import {colors, mono} from '../theme';
 const APP_VERSION = '0.5.0';
 const SAMPLE = 1234567.89;
 
-export function SettingsScreen({onBack}: {onBack: () => void}) {
+export function SettingsScreen({onBack, onOpenBench}: {onBack: () => void; onOpenBench: () => void}) {
   const {t, locale, remoteVersion} = useI18n();
   const events = useSyncExternalStore(debugSink.subscribe, debugSink.recent);
 
@@ -61,6 +61,13 @@ export function SettingsScreen({onBack}: {onBack: () => void}) {
           <View style={styles.kv}>
             <Text style={styles.key}>{t('settings.version', {version: APP_VERSION})}</Text>
           </View>
+        </View>
+
+        <View style={styles.card}>
+          <Pressable testID="openBench" onPress={onOpenBench} style={({pressed}) => [styles.row, pressed && styles.pressed]}>
+            <Text style={styles.rowText}>{t('settings.bench')}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
         </View>
 
         <View style={styles.card}>
@@ -125,6 +132,7 @@ const styles = StyleSheet.create({
   radioOn: {borderColor: colors.accent, borderWidth: 6},
   rowText: {flex: 1, fontSize: 16, color: colors.text},
   sample: {fontSize: 13, color: colors.mute},
+  chevron: {fontSize: 20, color: colors.mute},
   hint: {
     fontSize: 12,
     color: colors.mute,

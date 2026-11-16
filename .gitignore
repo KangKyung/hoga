@@ -4,3 +4,4 @@ daou_mts/
 node_modules/
 .claude/
 core/build-*/
+reports/
