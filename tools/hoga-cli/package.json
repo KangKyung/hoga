@@ -1,0 +1,19 @@
+{
+  "name": "@hoga/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "hoga: release helper — sync app versions across iOS/Android/JS, changelog from Conventional Commits, build AAB/archive, notify",
+  "type": "module",
+  "bin": { "hoga": "./bin/hoga.js" },
+  "scripts": {
+    "hoga": "node --import tsx src/main.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.0"
+  },
+  "engines": { "node": ">= 22.11.0" }
+}

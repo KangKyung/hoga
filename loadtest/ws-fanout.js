@@ -9,6 +9,7 @@
  *            끊긴 순간부터 새 연결에서 첫 시세를 받기까지 = 복구 시간
  *
  * 실행: k6 run -e BASE=http://localhost:8090 -e VUS=2000 loadtest/ws-fanout.js
+ * 클러스터: k6 run -e BASE=http://localhost:8080 -e WS_URLS=$(deploy/cluster.sh ws-urls) ... (관리 API는 BASE=nginx → market)
  * 같은 맥에서 k6와 서버를 함께 돌리므로 시계는 같고, 숫자는 "이 맥 한 대" 기준이다.
  */
 import http from 'k6/http';
@@ -18,7 +19,29 @@ import {setTimeout, clearTimeout} from 'k6/timers';
 import {WebSocket} from 'k6/websockets';
 
 const BASE = __ENV.BASE || 'http://localhost:8090';
-const WS = BASE.replace(/^http/, 'ws') + '/ws';
+// 여러 gateway에 직접 나눠 붙을 때: WS_URLS=ws://..:8201/ws,ws://..:8202/ws (VU 번호로 고름)
+// PROTO=bin: 시세를 이진(wire v1)으로 받는다(JSON과 대역폭·서버 CPU 비교용)
+const PROTO = __ENV.PROTO || 'json';
+const WS_URLS = (__ENV.WS_URLS || BASE.replace(/^http/, 'ws') + '/ws')
+  .split(',')
+  .map(u => (PROTO === 'bin' ? `${u}${u.includes('?') ? '&' : '?'}proto=bin` : u));
+
+/** 이진 메시지의 서버 시각(ts). [종류][종목 6바이트] 뒤: snap·delta는 seq 다음, trade는 맨 앞 */
+function binaryTs(bytes) {
+  let pos = 7;
+  const varint = () => {
+    let v = 0;
+    let mul = 1;
+    for (;;) {
+      const b = bytes[pos++];
+      v += (b & 0x7f) * mul;
+      if (b < 0x80) return v;
+      mul *= 0x80;
+    }
+  };
+  if (bytes[0] !== 3) varint(); // seq
+  return varint();
+}
 const VUS = Number(__ENV.VUS || 1000);
 const RAMP = __ENV.RAMP || '60s';
 const HOLD = __ENV.HOLD || '60s';
@@ -88,7 +111,7 @@ export default function () {
     sleep((Math.random() * cap) / 1000);
   }
   const picks = SYMBOLS.slice().sort(() => Math.random() - 0.5).slice(0, 1 + Math.floor(Math.random() * 3));
-  const ws = new WebSocket(WS);
+  const ws = new WebSocket(WS_URLS[__VU % WS_URLS.length]);
   let opened = false;
   let firstTick = true;
   let byUs = false;
@@ -104,7 +127,21 @@ export default function () {
     ws.send(JSON.stringify({op: 'sub', symbols: picks}));
   };
   let seen = 0;
+  if (PROTO === 'bin') ws.binaryType = 'arraybuffer';
   ws.onmessage = e => {
+    if (typeof e.data !== 'string') {
+      // 이진 프레임은 모두 시세
+      messages.add(1);
+      if (firstTick && closedAt) {
+        recovery.add(Date.now() - closedAt);
+        closedAt = 0;
+        attempt = 0;
+        retryWindow = 0;
+      }
+      firstTick = false;
+      if (seen++ % 20 === 0) tickLatency.add(Date.now() - binaryTs(new Uint8Array(e.data)));
+      return;
+    }
     // 부하 발생기(k6)가 먼저 한계에 닿지 않도록 메시지마다 JSON.parse 하지 않는다.
     // 시세(snap·delta·trade)는 "ts" 필드가 있다. 개수는 전부 세고, 지연은 20개 중 1개만 잰다.
     const data = e.data;

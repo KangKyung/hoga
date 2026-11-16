@@ -170,8 +170,14 @@ class IosTransport final : public hoga::ITransport {
         if (error) connection->finish(kAbnormalClosure, toStd(error.localizedDescription));
         return;
       }
-      if (message.type == NSURLSessionWebSocketMessageTypeString && connection->callbacks.onMessage) {
-        connection->callbacks.onMessage(toStd(message.string));
+      if (connection->callbacks.onMessage) {
+        if (message.type == NSURLSessionWebSocketMessageTypeString) {
+          connection->callbacks.onMessage(toStd(message.string));
+        } else if (message.data.length > 0) {
+          // 이진 시세(wire v1): 바이트를 그대로 넘기면 C++ MarketClient가 첫 바이트로 형식을 가린다
+          connection->callbacks.onMessage(
+              std::string(static_cast<const char *>(message.data.bytes), static_cast<std::size_t>(message.data.length)));
+        }
       }
       NSURLSessionWebSocketTask *strongTask = weakTask;
       if (strongTask) receiveNext(strongTask, connection);

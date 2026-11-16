@@ -1,8 +1,9 @@
 // Hoga MTS — Jenkins 파이프라인(맥 한 대: iOS 빌드는 macOS가 필요해 Docker Jenkins 대신 Homebrew jenkins-lts)
 //
-//   Prepare ─▶ ┌ C++ core (일반 · ASan · TSan)
-//              ├ Server   (N-API 애드온 · 애드온 테스트 · vitest · tsc)
+//   Prepare ─▶ ┌ C++ core (일반 · ASan · TSan · JSON vs 이진 벤치)
+//              ├ Server   (N-API 애드온 · 애드온 테스트 · vitest(Redis 클러스터 포함) · tsc)
 //              ├ App JS   (Jest · tsc · ESLint)
+//              ├ Tools    (hoga-cli 테스트 · 앱 버전 일치 확인)
 //              ├ iOS      (pod install · xcodebuild)
 //              └ Android  (lint · assembleDebug)
 //          ─▶ E2E ┌ iOS     (Appium XCUITest)     ← 같은 WebdriverIO 테스트 한 벌
@@ -44,6 +45,7 @@ pipeline {
         stage('C++ core') { steps { sh 'ci/core.sh' } }
         stage('Server') { steps { sh 'ci/server.sh' } }
         stage('App JS') { steps { sh 'ci/app-js.sh' } }
+        stage('Tools') { steps { sh 'ci/tools.sh' } }
         stage('iOS') { steps { sh 'ci/ios.sh' } }
         stage('Android') { steps { sh 'ci/android.sh' } }
       }

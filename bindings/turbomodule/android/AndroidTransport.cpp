@@ -223,6 +223,13 @@ void JNICALL nativeOnMessage(JNIEnv* e, jclass, jlong ptr, jlong token, jstring 
   self(ptr)->onMessage(token, toStd(e, text));
 }
 
+void JNICALL nativeOnBinary(JNIEnv* e, jclass, jlong ptr, jlong token, jbyteArray bytes) {
+  const auto n = e->GetArrayLength(bytes);
+  std::string out(static_cast<std::size_t>(n), '\0');
+  e->GetByteArrayRegion(bytes, 0, n, reinterpret_cast<jbyte*>(out.data()));
+  self(ptr)->onMessage(token, std::move(out));
+}
+
 void JNICALL nativeOnClose(JNIEnv* e, jclass, jlong ptr, jlong token, jint code, jstring reason) {
   self(ptr)->onClose(token, code, toStd(e, reason));
 }
@@ -261,6 +268,7 @@ bool registerHogaTransportNatives(JavaVM* vm, JNIEnv* e) {
   static const JNINativeMethod methods[] = {
       {"nativeOnOpen", "(JJ)V", reinterpret_cast<void*>(nativeOnOpen)},
       {"nativeOnMessage", "(JJLjava/lang/String;)V", reinterpret_cast<void*>(nativeOnMessage)},
+      {"nativeOnBinary", "(JJ[B)V", reinterpret_cast<void*>(nativeOnBinary)},
       {"nativeOnClose", "(JJILjava/lang/String;)V", reinterpret_cast<void*>(nativeOnClose)},
       {"nativeOnHttp", "(JIILjava/lang/String;)V", reinterpret_cast<void*>(nativeOnHttp)},
       {"nativeOnTimer", "(JI)V", reinterpret_cast<void*>(nativeOnTimer)},

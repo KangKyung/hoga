@@ -169,7 +169,7 @@ test('login → watchlist → quote screen → order sheet', async () => {
     r = ReactTestRenderer.create(<App />);
     await flush();
   });
-  expect(NativeHogaCore.connect).toHaveBeenCalledWith('ws://localhost:8080/ws', 'http://localhost:8080');
+  expect(NativeHogaCore.connect).toHaveBeenCalledWith('ws://localhost:8080/ws?proto=bin', 'http://localhost:8080');
   expect(NativeDeviceGuard.setSecureScreen).toHaveBeenCalledWith(true);
 
   // 저장된 세션이 없으므로 로그인 화면
@@ -318,6 +318,105 @@ test('bench: switching to the JS-routed mode taps every market message and rende
   });
   expect(NativeHogaCore.setMarketTap).toHaveBeenLastCalledWith(false);
   expect(mockMarketListeners).toHaveLength(0);
+
+  await ReactTestRenderer.act(async () => r.unmount());
+});
+
+test('OTP: an order that needs OTP asks for a code, verifies, and resends with the same key', async () => {
+  const orderPosts: {key: string; stepUp?: string}[] = [];
+  const base = globalThis.fetch as jest.Mock;
+  globalThis.fetch = jest.fn(async (url: string, init?: {method?: string; headers?: Record<string, string>; body?: string}) => {
+    if (url.endsWith('/orders') && init?.method === 'POST') {
+      orderPosts.push({key: init.headers!['idempotency-key']!, stepUp: init.headers!['x-step-up']});
+      if (!init.headers!['x-step-up']) return respond(403, {error: 'OTP_REQUIRED'});
+      const body = JSON.parse(init.body!);
+      return respond(200, {...body, key: init.headers!['idempotency-key'], orderId: 9, status: 'NEW', reject: 'NONE', filled: 0, resting: body.qty, fills: [], acceptedAt: 0, updatedAt: 0});
+    }
+    if (url.endsWith('/auth/otp/verify')) {
+      return JSON.parse(init!.body!).code === '123456' ? respond(200, {stepUpToken: 'step-up-1', expiresIn: 600}) : respond(401, {error: 'OTP_INVALID'});
+    }
+    return base(url, init);
+  }) as unknown as typeof fetch;
+
+  const r = await renderSignedIn();
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'watch-000001'}).props.onPress();
+    await flush();
+  });
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'buyButton'}).props.onPress();
+  });
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'submitOrder'}).props.onPress();
+    await flush();
+  });
+  expect(r.root.findByProps({testID: 'orderProgress'}).props.children).toBe('이 계정은 주문 전 OTP 인증이 필요합니다');
+  // OTP를 기다리는 동안 원래 주문 버튼은 눌리지 않는다(같은 주문이 하나 더 시작되지 않게)
+  expect(r.root.findByProps({testID: 'submitOrder'}).props.disabled).toBe(true);
+
+  // 5자리까지는 보내지 않는다
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'otpCode'}).props.onChangeText('12345');
+    await flush();
+  });
+  expect(r.root.findByProps({testID: 'otpSubmit'}).props.disabled).toBe(true);
+
+  // 6자리가 되면 바로 확인(숫자 키패드에는 Return 키가 없다). 틀린 코드 → 오류, 주문은 다시 보내지 않음
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'otpCode'}).props.onChangeText('000000');
+    await flush();
+  });
+  expect(r.root.findByProps({testID: 'otpError'})).toBeTruthy();
+  expect(orderPosts).toHaveLength(1);
+
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'otpCode'}).props.onChangeText('12-34 56'); // 숫자만 남긴다
+    await flush();
+    await flush();
+  });
+  expect(orderPosts).toEqual([{key: 'key-123', stepUp: undefined}, {key: 'key-123', stepUp: 'step-up-1'}]);
+  expect(r.root.findByProps({testID: 'orderProgress'}).props.children).toBe('주문이 접수되었습니다');
+
+  await ReactTestRenderer.act(async () => r.unmount());
+});
+
+test('OTP settings: enroll shows a QR and the key once, a code turns it on', async () => {
+  const base = globalThis.fetch as jest.Mock;
+  let enabled = false;
+  globalThis.fetch = jest.fn(async (url: string, init?: {method?: string; body?: string}) => {
+    if (url.endsWith('/auth/otp')) return respond(200, {enabled});
+    if (url.endsWith('/auth/otp/enroll')) {
+      return respond(200, {secret: 'JBSWY3DPEHPK3PXP', otpauthUrl: 'otpauth://totp/Hoga%20MTS:u-demo?secret=JBSWY3DPEHPK3PXP&issuer=Hoga%20MTS'});
+    }
+    if (url.endsWith('/auth/otp/confirm')) {
+      enabled = JSON.parse(init!.body!).code === '654321';
+      return enabled ? respond(200, {enabled: true}) : respond(401, {error: 'OTP_INVALID'});
+    }
+    return base(url, init);
+  }) as unknown as typeof fetch;
+
+  const r = await renderSignedIn();
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'openSettings'}).props.onPress();
+    await flush();
+  });
+  expect(r.root.findByProps({testID: 'otpStatus'}).props.children).toBe('사용 안 함');
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'otpEnroll'}).props.onPress();
+    await flush();
+  });
+  expect(r.root.findByProps({testID: 'otpSecret'}).props.children).toBe('JBSW Y3DP EHPK 3PXP');
+  // QR은 View 조각들로 그린다(검은 칸이 있어야 한다)
+  expect(r.root.findByProps({testID: 'otpQr'}).findAll(n => (n.type as unknown) === 'View').length).toBeGreaterThan(20);
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'otpSettingsCode'}).props.onChangeText('654321');
+  });
+  await ReactTestRenderer.act(async () => {
+    r.root.findByProps({testID: 'otpConfirm'}).props.onPress();
+    await flush();
+  });
+  expect(r.root.findByProps({testID: 'otpStatus'}).props.children).toBe('사용 중 — 주문 전 10분마다 코드 확인');
+  expect(r.root.findAllByProps({testID: 'otpSecret'})).toHaveLength(0); // 키는 다시 보여 주지 않는다
 
   await ReactTestRenderer.act(async () => r.unmount());
 });

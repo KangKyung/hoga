@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import { signAccessToken, verifyAccessToken, type AccessClaims } from './jwt.js';
+import { InMemoryRefreshStore, type RefreshStore } from './refreshStore.js';
 import type { User, UserStore } from './users.js';
 
 export interface AuthConfig {
@@ -16,13 +17,6 @@ export interface TokenPair {
   refreshToken: string;
   expiresIn: number;
   user: User;
-}
-
-interface RefreshEntry {
-  userId: string;
-  familyId: string;
-  expiresAt: number;
-  used: boolean;
 }
 
 export type AuthFailure = 'INVALID_CREDENTIALS' | 'TOO_MANY_ATTEMPTS' | 'INVALID_REFRESH' | 'REFRESH_REUSED';
@@ -44,17 +38,16 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
  * - 로그인 실패는 사용자 이름별로 1분에 N번까지만
  */
 export class AuthService {
-  private readonly refresh = new Map<string, RefreshEntry>();
-  private readonly revokedFamilies = new Set<string>();
   private readonly failures = new Map<string, number[]>();
 
   constructor(
     private readonly users: UserStore,
     private readonly config: AuthConfig,
     private readonly now: () => number = Date.now,
+    private readonly refresh: RefreshStore = new InMemoryRefreshStore(),
   ) {}
 
-  login(username: string, password: string): TokenPair {
+  async login(username: string, password: string): Promise<TokenPair> {
     const nowMs = this.now();
     const recent = (this.failures.get(username) ?? []).filter((t) => nowMs - t < 60_000);
     if (recent.length >= this.config.maxFailuresPerMinute) throw new AuthError('TOO_MANY_ATTEMPTS');
@@ -68,39 +61,39 @@ export class AuthService {
     return this.issue(user, randomBytes(8).toString('hex'));
   }
 
-  rotate(refreshToken: string): TokenPair {
-    const key = sha256(refreshToken);
-    const entry = this.refresh.get(key);
-    if (!entry || entry.expiresAt <= this.now() || this.revokedFamilies.has(entry.familyId)) {
+  async rotate(refreshToken: string): Promise<TokenPair> {
+    // 사용 표시는 저장소가 원자적으로 한다(동시에 두 요청이 와도 하나만 성공)
+    const result = await this.refresh.consume(sha256(refreshToken));
+    if (result.state === 'missing') throw new AuthError('INVALID_REFRESH');
+    const { entry } = result;
+    if (entry.expiresAt <= this.now() || (await this.refresh.isRevoked(entry.familyId))) {
       throw new AuthError('INVALID_REFRESH');
     }
-    if (entry.used) {
+    if (result.state === 'reused') {
       // 한 번 쓴 토큰이 다시 왔다 → 누군가 복사해 쓰고 있다. 이 계열 전체를 무효화한다.
-      this.revokedFamilies.add(entry.familyId);
+      await this.refresh.revokeFamily(entry.familyId, this.config.refreshTtlSec * 1000);
       throw new AuthError('REFRESH_REUSED');
     }
-    entry.used = true;
     const user = this.users.get(entry.userId);
     if (!user) throw new AuthError('INVALID_REFRESH');
     return this.issue(user, entry.familyId);
   }
 
-  logout(refreshToken: string): void {
-    const entry = this.refresh.get(sha256(refreshToken));
-    if (entry) this.revokedFamilies.add(entry.familyId);
+  async logout(refreshToken: string): Promise<void> {
+    const entry = await this.refresh.peek(sha256(refreshToken));
+    if (entry) await this.refresh.revokeFamily(entry.familyId, this.config.refreshTtlSec * 1000);
   }
 
   verify(accessToken: string): AccessClaims {
     return verifyAccessToken(this.config.secret, accessToken, Math.floor(this.now() / 1000));
   }
 
-  private issue(user: User, familyId: string): TokenPair {
+  private async issue(user: User, familyId: string): Promise<TokenPair> {
     const refreshToken = randomBytes(32).toString('base64url');
-    this.refresh.set(sha256(refreshToken), {
+    await this.refresh.save(sha256(refreshToken), {
       userId: user.id,
       familyId,
       expiresAt: this.now() + this.config.refreshTtlSec * 1000,
-      used: false,
     });
     return {
       accessToken: signAccessToken(

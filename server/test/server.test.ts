@@ -216,7 +216,8 @@ describe('WebSocket gateway', () => {
     // 클라이언트가 읽기를 멈춘 상태에서 시세를 대량으로 만든다 → 서버 송신 버퍼가 쌓인다
     const socket = (client.ws as unknown as { _socket: { pause(): void; resume(): void } })._socket;
     socket.pause();
-    for (let i = 0; i < 40; i++) {
+    // 건너뛰기(conflation)가 시작될 때까지만 만든다(고정 횟수로 돌리면 CI에서 빌드와 겹칠 때 5초를 넘긴다)
+    for (let i = 0; i < 40 && server.metrics.get('hoga_ws_conflated_total') === 0; i++) {
       server.market.warmUp(1000);
       await new Promise((r) => setImmediate(r));
     }
@@ -241,7 +242,7 @@ describe('WebSocket gateway', () => {
       seq = m.seq;
     }
     client.ws.close();
-  });
+  }, 20_000);
 
   it('서버 종료 시 1012(서비스 재시작)로 닫는다', async () => {
     const server = await start();

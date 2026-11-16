@@ -1,9 +1,10 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
+import {ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
 
 import type {SymbolInfo} from '../api/symbols';
 import {hogaCore} from '../native/hogaCore';
-import {UNCONFIRMED, type OrderProgress} from '../orders/placeOrder';
+import {OTP_CANCELLED, UNCONFIRMED, type OrderProgress} from '../orders/placeOrder';
+import {otp} from '../auth/otp';
 import {orderService} from '../orders/orderService';
 import type {OrderType, Side} from '../orders/types';
 import {track} from '../analytics/analytics';
@@ -35,6 +36,11 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
   const [price, setPrice] = useState(initialPrice);
   const [qtyText, setQtyText] = useState('10');
   const [progress, setProgress] = useState<OrderProgress | null>(null);
+  // OTP 입력을 기다리는 주문(placeOrder가 await 중). true = 인증 끝, false = 취소
+  const otpWaiter = useRef<((ok: boolean) => void) | null>(null);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpBusy, setOtpBusy] = useState(false);
 
   const qty = Number(qtyText);
   const limits = useMemo(() => hogaCore.priceLimits(symbol.basePrice), [symbol.basePrice]);
@@ -48,6 +54,40 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
   );
   const inFlight = progress?.phase === 'submitting' || progress?.phase === 'confirming';
   const done = progress?.phase === 'accepted' || progress?.phase === 'rejected' || progress?.phase === 'failed';
+  const askingOtp = progress?.phase === 'otp';
+
+  const requestOtp = () =>
+    new Promise<boolean>(resolve => {
+      setOtpCode('');
+      setOtpError(null);
+      otpWaiter.current = resolve;
+    });
+
+  const submitOtp = async (code = otpCode) => {
+    if (otpBusy || !/^\d{6}$/.test(code)) return;
+    setOtpBusy(true);
+    const r = await otp.verify(code);
+    setOtpBusy(false);
+    if (r.ok) {
+      otpWaiter.current?.(true);
+      otpWaiter.current = null;
+    } else {
+      setOtpCode('');
+      setOtpError(
+        t(r.error === 'OTP_LOCKED' ? 'order.otpLocked' : r.error === 'NETWORK' ? 'session.unreachable' : 'order.otpInvalid'),
+      );
+    }
+  };
+
+  const cancelOtp = () => {
+    otpWaiter.current?.(false);
+    otpWaiter.current = null;
+  };
+
+  const close = () => {
+    cancelOtp();
+    onClose();
+  };
   const tint = side === 'bid' ? colors.up : colors.down;
   const sawConfirming = useRef(false);
 
@@ -105,18 +145,21 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
         qty,
       },
       onProgress,
+      requestOtp,
     );
   };
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={inFlight ? undefined : onClose}>
-      <View style={styles.backdrop}>
+    <Modal transparent animationType="slide" visible onRequestClose={inFlight ? undefined : close}>
+      {/* 숫자 키패드가 시트 아래(OTP 입력·확인 버튼)를 가리지 않게 시트를 올린다.
+          Android의 Modal은 별도 창이라 adjustResize가 적용되지 않아 두 플랫폼 모두 padding으로 */}
+      <KeyboardAvoidingView style={styles.backdrop} behavior="padding">
         <View style={styles.sheet}>
           <View style={styles.header}>
             <Text style={styles.title}>
               {symbol.name} <Text style={styles.code}>{symbol.code}</Text>
             </Text>
-            <Pressable testID="closeOrder" disabled={inFlight} onPress={onClose} hitSlop={12}>
+            <Pressable testID="closeOrder" disabled={inFlight} onPress={close} hitSlop={12}>
               <Text style={[styles.close, inFlight && styles.disabledText]}>{t('common.close')}</Text>
             </Pressable>
           </View>
@@ -207,6 +250,47 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
 
           {progress ? <ProgressView progress={progress} /> : null}
 
+          {askingOtp ? (
+            <View style={styles.otpBox}>
+              <TextInput
+                testID="otpCode"
+                value={otpCode}
+                onChangeText={v => {
+                  const code = v.replace(/\D/g, '').slice(0, 6);
+                  setOtpCode(code);
+                  // 6자리가 차면 바로 확인(iOS 숫자 키패드에는 Return 키가 없다)
+                  if (code.length === 6) submitOtp(code);
+                }}
+                onSubmitEditing={() => submitOtp()}
+                placeholder={t('order.otpPlaceholder')}
+                placeholderTextColor={colors.mute}
+                keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="one-time-code"
+                maxLength={6}
+                autoFocus
+                style={[styles.otpInput, mono]}
+              />
+              {otpError ? (
+                <Text testID="otpError" style={styles.error}>
+                  {otpError}
+                </Text>
+              ) : null}
+              <View style={styles.otpActions}>
+                <Pressable testID="otpCancel" style={[styles.otpBtn, styles.otpCancelBtn]} onPress={cancelOtp}>
+                  <Text style={styles.otpBtnText}>{t('order.otpCancel')}</Text>
+                </Pressable>
+                <Pressable
+                  testID="otpSubmit"
+                  style={[styles.otpBtn, {backgroundColor: tint}, (otpCode.length !== 6 || otpBusy) && styles.disabled]}
+                  disabled={otpCode.length !== 6 || otpBusy}
+                  onPress={() => submitOtp()}>
+                  <Text style={[styles.otpBtnText, styles.otpBtnTextOn]}>{t('order.otpSubmit')}</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
           {done ? (
             <Pressable testID="orderDone" style={[styles.submit, styles.segmentNeutral]} onPress={onClose}>
               <Text style={styles.submitText}>{t('common.confirm')}</Text>
@@ -214,8 +298,9 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
           ) : (
             <Pressable
               testID="submitOrder"
-              style={[styles.submit, {backgroundColor: tint}, (reject !== 'NONE' || inFlight) && styles.disabled]}
-              disabled={reject !== 'NONE' || inFlight}
+              style={[styles.submit, {backgroundColor: tint}, (reject !== 'NONE' || inFlight || askingOtp) && styles.disabled]}
+              // OTP를 기다리는 동안 다시 누르면 같은 주문이 하나 더 시작된다 → 막는다
+              disabled={reject !== 'NONE' || inFlight || askingOtp}
               onPress={submit}>
               {inFlight ? (
                 <ActivityIndicator color="#fff" />
@@ -229,7 +314,7 @@ export function OrderSheet({symbol, initialSide, initialPrice, entry = 'button',
             </Pressable>
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -244,6 +329,10 @@ function ProgressView({progress}: {progress: OrderProgress}) {
       break;
     case 'confirming':
       text = t('order.confirming');
+      color = colors.warn;
+      break;
+    case 'otp':
+      text = t('order.otpRequired');
       color = colors.warn;
       break;
     case 'accepted':
@@ -263,7 +352,12 @@ function ProgressView({progress}: {progress: OrderProgress}) {
       color = colors.danger;
       break;
     case 'failed':
-      text = message === UNCONFIRMED ? t('order.unknown') : t('order.failed', {reason: rejectText(message)});
+      text =
+        message === UNCONFIRMED
+          ? t('order.unknown')
+          : message === OTP_CANCELLED
+          ? t('order.otpCancelled')
+          : t('order.failed', {reason: rejectText(message)});
       color = colors.danger;
       break;
   }
@@ -349,6 +443,23 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   progress: {fontSize: 14, fontWeight: '600'},
+  otpBox: {gap: 8},
+  otpInput: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 22,
+    letterSpacing: 6,
+    textAlign: 'center',
+    color: colors.text,
+  },
+  otpActions: {flexDirection: 'row', gap: 8},
+  otpBtn: {flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: 'center'},
+  otpCancelBtn: {borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card},
+  otpBtnText: {fontSize: 15, fontWeight: '700', color: colors.text},
+  otpBtnTextOn: {color: '#fff'},
   submit: {borderRadius: 10, paddingVertical: 15, alignItems: 'center'},
   submitText: {color: '#fff', fontSize: 16, fontWeight: '700'},
   disabled: {opacity: 0.4},

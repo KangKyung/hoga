@@ -1,0 +1,107 @@
+{
+  "$comment": "시세 이진 형식 v1 골든 벡터. C++(core/tests/wire_test.cpp)과 TS(server/test/wire.test.ts)가 둘 다 이 값과 같아야 한다. 정의: core/include/hoga/wire.hpp",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "delta: bid 71,200 qty 530",
+      "json": {
+        "t": "delta",
+        "sym": "000001",
+        "seq": 123456,
+        "ts": 1794790000000,
+        "side": "B",
+        "px": 71200,
+        "qty": 530
+      },
+      "hex": "02303030303031c0c407808bc88e9e3400a0ac049204",
+      "jsonBytes": 92,
+      "binaryBytes": 22
+    },
+    {
+      "name": "delta: ask level removed (qty 0)",
+      "json": {
+        "t": "delta",
+        "sym": "000005",
+        "seq": 1,
+        "ts": 0,
+        "side": "A",
+        "px": 1250,
+        "qty": 0
+      },
+      "hex": "02303030303035010001e20900",
+      "jsonBytes": 72,
+      "binaryBytes": 13
+    },
+    {
+      "name": "trade: buyer-initiated",
+      "json": {
+        "t": "trade",
+        "sym": "000002",
+        "ts": 1794790000123,
+        "px": 18480,
+        "qty": 10,
+        "aggr": "B"
+      },
+      "hex": "03303030303032fb8bc88e9e34b090010a00",
+      "jsonBytes": 78,
+      "binaryBytes": 18
+    },
+    {
+      "name": "snapshot: 2 bids, 1 ask",
+      "json": {
+        "t": "snap",
+        "sym": "000001",
+        "seq": 42,
+        "ts": 1794790000000,
+        "bids": [
+          [
+            71200,
+            120
+          ],
+          [
+            71100,
+            300
+          ]
+        ],
+        "asks": [
+          [
+            71300,
+            80
+          ]
+        ]
+      },
+      "hex": "013030303030312a808bc88e9e3402a0ac0478bcab04ac020184ad0450",
+      "jsonBytes": 108,
+      "binaryBytes": 29
+    },
+    {
+      "name": "snapshot: empty book",
+      "json": {
+        "t": "snap",
+        "sym": "000004",
+        "seq": 0,
+        "ts": 1,
+        "bids": [],
+        "asks": []
+      },
+      "hex": "0130303030303400010000",
+      "jsonBytes": 62,
+      "binaryBytes": 11
+    },
+    {
+      "name": "delta: largest safe integer price",
+      "json": {
+        "t": "delta",
+        "sym": "000003",
+        "seq": 7,
+        "ts": 5,
+        "side": "B",
+        "px": 9007199254740991,
+        "qty": 1
+      },
+      "hex": "02303030303033070500ffffffffffffff0f01",
+      "jsonBytes": 84,
+      "binaryBytes": 19
+    }
+  ]
+}

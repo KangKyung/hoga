@@ -5,6 +5,7 @@
  * 필요한 것: 서버(localhost:8080), Metro(8081), 부팅된 시뮬레이터/에뮬레이터, Appium(4723).
  * 앱은 미리 빌드해 둔다. 경로는 IOS_APP / ANDROID_APK로 바꿀 수 있다.
  */
+import {mkdirSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -57,10 +58,15 @@ export const config: WebdriverIO.Config = {
     'spec',
     ['junit', {outputDir: path.join(here, 'reports', platform), outputFileFormat: () => `e2e-${platform}.xml`}],
   ],
-  /** 실패하면 화면을 남긴다(Android는 FLAG_SECURE라 검은 화면일 수 있다) */
+  /** 실패하면 화면과 요소 트리(XML)를 남긴다. Android는 FLAG_SECURE라 화면이 검게 저장되므로 트리가 단서다 */
   afterTest: async (test, _context, {passed}) => {
     if (passed) return;
-    const file = path.join(here, 'reports', platform, `${test.title.replace(/[^\w가-힣-]+/g, '_')}.png`);
-    await browser.saveScreenshot(file).catch(() => {});
+    const base = path.join(here, 'reports', platform, test.title.replace(/[^\w가-힣-]+/g, '_'));
+    mkdirSync(path.dirname(base), {recursive: true});
+    await browser.saveScreenshot(`${base}.png`).catch(() => {});
+    await browser
+      .getPageSource()
+      .then(xml => writeFileSync(`${base}.xml`, xml))
+      .catch(() => {});
   },
 };

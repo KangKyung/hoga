@@ -3,11 +3,12 @@ import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {debugSink, track} from '../analytics/analytics';
 import {SERVER} from '../config';
+import {OtpSettings} from '../components/OtpSettings';
 import {LOCALE_NAMES, LOCALES, refreshFromServer, setLocale, useI18n, type Locale} from '../i18n';
 import {saveLocale} from '../i18n/persist';
 import {colors, mono} from '../theme';
+import {APP_VERSION} from '../version';
 
-const APP_VERSION = '0.5.0';
 const SAMPLE = 1234567.89;
 
 export function SettingsScreen({onBack, onOpenBench}: {onBack: () => void; onOpenBench: () => void}) {
@@ -32,7 +33,7 @@ export function SettingsScreen({onBack, onOpenBench}: {onBack: () => void; onOpe
         <View style={styles.spacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <View style={styles.card}>
           <Text style={styles.section}>{t('settings.language')}</Text>
           {LOCALES.map(l => (
@@ -62,6 +63,8 @@ export function SettingsScreen({onBack, onOpenBench}: {onBack: () => void; onOpe
             <Text style={styles.key}>{t('settings.version', {version: APP_VERSION})}</Text>
           </View>
         </View>
+
+        <OtpSettings />
 
         <View style={styles.card}>
           <Pressable testID="openBench" onPress={onOpenBench} style={({pressed}) => [styles.row, pressed && styles.pressed]}>

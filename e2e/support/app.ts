@@ -3,7 +3,8 @@
  * - iOS: testID → accessibilityIdentifier → `~id`
  * - Android: testID → resource-id(RN이 view id로 넣음) → UiSelector
  */
-import {readFileSync} from 'node:fs';
+import {createHmac} from 'node:crypto';
+import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -63,13 +64,22 @@ export async function exists(id: string, timeout = 1_500): Promise<boolean> {
 /** 조건이 맞을 때까지 글자를 다시 읽는다 */
 export async function waitForText(id: string, ok: (text: string) => boolean, timeout = 15_000, what = id): Promise<string> {
   let last = '';
-  await browser.waitUntil(
-    async () => {
-      last = await textOf(id).catch(() => '');
-      return ok(last);
-    },
-    {timeout, interval: 300, timeoutMsg: `${what}: 마지막 값 "${last}"`},
-  );
+  try {
+    await browser.waitUntil(
+      async () => {
+        last = await textOf(id).catch(() => '');
+        return ok(last);
+      },
+      {timeout, interval: 300},
+    );
+  } catch {
+    // 실패한 순간의 요소 트리(Android는 FLAG_SECURE라 화면 캡처 대신 이것이 단서)
+    const dir = path.join(here, '..', 'reports', driver.isIOS ? 'ios' : 'android');
+    mkdirSync(dir, {recursive: true});
+    const xml = await browser.getPageSource().catch(() => '');
+    writeFileSync(path.join(dir, `waitfail-${what.replace(/[^\w-]+/g, '_')}.xml`), xml);
+    throw new Error(`${what}: 마지막 값 "${last}"`);
+  }
   return last;
 }
 
@@ -129,11 +139,13 @@ export async function goHome() {
 }
 
 /** 어떤 화면에서 시작하든 로그인 → 관심종목 → 언어 ko 까지 맞춘다 */
-export async function signInFresh() {
+export async function signInFresh(user: {username: string; password: string} = {username: 'demo', password: 'hoga-demo-1234'}) {
   await dismissSystemPrompts(1_500);
-  // 이전 실행이 남긴 화면에서 관심종목까지 돌아온다
-  await goHome();
+  // 이전 실행이 남긴 화면에서 관심종목까지 돌아온다(주문 창이 위에 떠 있으면 먼저 닫는다)
+  await tapIfPresent('otpCancel');
+  await tapIfPresent('orderDone');
   await tapIfPresent('closeOrder');
+  await goHome();
   await tapIfPresent('logout', 1_500);
   await tapIfPresent('otherAccount', 1_000);
 
@@ -146,7 +158,9 @@ export async function signInFresh() {
     },
     {timeout: 30_000, interval: 500, timeoutMsg: 'login screen did not appear'},
   );
-  await password.setValue('hoga-demo-1234');
+  const username = byId('username');
+  if ((await username.getText().catch(() => '')) !== user.username) await username.setValue(user.username);
+  await password.setValue(user.password);
   if (await exists('login', 1_000)) {
     await tap('login');
   } else if (isIOS()) {
@@ -174,4 +188,41 @@ export async function signInFresh() {
   await tap('locale-ko');
   await tap('back');
   await byId('watch-000001').waitForDisplayed();
+}
+
+// ---- OTP(시험이 인증 앱 역할) ----
+
+
+function base32(text: string): Buffer {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0;
+  let value = 0;
+  const out: number[] = [];
+  for (const ch of text.replace(/=+$/, '')) {
+    value = (value << 5) | alphabet.indexOf(ch);
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+/** RFC 6238 TOTP(30초, 6자리). offset으로 다음 구간 코드도 만든다(같은 코드 재사용 금지 대응) */
+export function totp(secret: string, offset = 0, now = Date.now()): string {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(now / 30_000) + offset));
+  const mac = createHmac('sha1', base32(secret)).update(counter).digest();
+  const o = mac[mac.length - 1]! & 0x0f;
+  return String((mac.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+}
+
+export async function api(path: string, body: unknown, token?: string) {
+  const res = await fetch(`${SERVER}${path}`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', ...(token ? {authorization: `Bearer ${token}`} : {})},
+    body: JSON.stringify(body),
+  });
+  return {status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, string>};
 }

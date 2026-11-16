@@ -168,5 +168,24 @@
   "bench.received": "Messages / s",
   "bench.run": "Measure {n}s",
   "bench.running": "Measuring… {n}",
-  "bench.hint": "Raise the tick rate in the admin console, then measure each mode"
+  "bench.hint": "Raise the tick rate in the admin console, then measure each mode",
+
+  "order.otpRequired": "This account needs an OTP before placing orders",
+  "order.otpPlaceholder": "6-digit code from your authenticator",
+  "order.otpSubmit": "Verify and order",
+  "order.otpCancel": "Cancel order",
+  "order.otpInvalid": "Wrong code. Enter the next code.",
+  "order.otpLocked": "Too many wrong codes. OTP is locked for 5 minutes.",
+  "order.otpCancelled": "OTP was cancelled, so the order was not sent.",
+  "settings.otp": "Order OTP (2-step verification)",
+  "settings.otpOn": "On — code required every 10 minutes before ordering",
+  "settings.otpOff": "Off",
+  "settings.otpEnroll": "Set up OTP",
+  "settings.otpEnrollHint": "Scan the QR with an authenticator app (e.g. Google Authenticator) or type the key below, then enter the 6-digit code to confirm. The key is shown only once.",
+  "settings.otpKey": "Setup key",
+  "settings.otpConfirm": "Confirm and turn on",
+  "settings.otpDisable": "Turn off OTP",
+  "settings.otpCodePlaceholder": "6-digit code",
+  "settings.otpInvalid": "Wrong code",
+  "settings.otpLocked": "Locked for 5 minutes after too many wrong codes"
 }

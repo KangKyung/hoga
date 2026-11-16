@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <random>
+#include <type_traits>
+#include <variant>
 
+#include "hoga/wire.hpp"
 #include "nlohmann/json.hpp"
 
 namespace hoga {
@@ -310,6 +313,10 @@ void MarketClient::onMessage(std::uint64_t generation, const std::string& text) 
 }
 
 void MarketClient::handleMessageLocked(const std::string& text, Deferred& after) {
+  if (wire::isBinary(text)) {
+    handleBinaryLocked(text, after);
+    return;
+  }
   const auto msg = json::parse(text, nullptr, /*allow_exceptions=*/false);
   if (msg.is_discarded() || !msg.is_object()) {
     ++stats_.parseErrors;
@@ -330,33 +337,18 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
       return;
     }
     const auto symbol = msg.value("sym", std::string{});
-    auto it = symbols_.find(symbol);
-    if (it == symbols_.end()) return;  // 구독 해제한 종목의 늦은 메시지
-    auto& data = it->second;
-    const auto now = options_.nowMs();
-
     if (type == "snap") {
       const auto bids = parseLevels(msg.at("bids"));
       const auto asks = parseLevels(msg.at("asks"));
-      const auto event = data.sync->onSnapshot(msg.at("seq").get<Seq>(), bids, asks);
-      data.lastUpdateMs = now;
-      if (event == SyncEvent::NeedSnapshot) requestSnapshotLocked(symbol);
+      if (!applySnapshotLocked(symbol, msg.at("seq").get<Seq>(), bids, asks)) return;
     } else if (type == "delta") {
       const Delta delta{msg.at("seq").get<Seq>(), msg.at("side").get<std::string>() == "B" ? Side::Bid : Side::Ask,
                         msg.at("px").get<Price>(), msg.at("qty").get<Qty>()};
-      const auto event = data.sync->onDelta(delta);
-      if (event == SyncEvent::Applied) data.lastUpdateMs = now;
-      if (event == SyncEvent::NeedSnapshot) {
-        ++stats_.gaps;
-        requestSnapshotLocked(symbol);
-      }
+      if (!applyDeltaLocked(symbol, delta)) return;
     } else if (type == "trade") {
-      data.trades.push_front({msg.at("px").get<Price>(), msg.at("qty").get<Qty>(),
-                              msg.at("aggr").get<std::string>() == "B" ? Side::Bid : Side::Ask,
-                              msg.value("ts", std::int64_t{0})});
-      while (data.trades.size() > options_.tradeHistory) data.trades.pop_back();
-      const auto& t = data.trades.front();
-      data.candles->addTrade(t.ts, t.price, t.qty);
+      const Trade trade{msg.at("px").get<Price>(), msg.at("qty").get<Qty>(),
+                        msg.at("aggr").get<std::string>() == "B" ? Side::Bid : Side::Ask, msg.value("ts", std::int64_t{0})};
+      if (!applyTradeLocked(symbol, trade)) return;
     } else {
       return;
     }
@@ -366,6 +358,63 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
     // 필드가 없거나 타입이 틀린 메시지. 연결은 유지하고 버린다.
     ++stats_.parseErrors;
   }
+}
+
+// 이진 시세(v1). 주문 알림·오류 같은 드문 메시지는 계속 JSON이다.
+void MarketClient::handleBinaryLocked(const std::string& bytes, Deferred& after) {
+  const auto decoded = wire::decode(bytes);
+  if (!decoded) {
+    ++stats_.parseErrors;
+    return;
+  }
+  const bool known = std::visit(
+      [this](const auto& m) {
+        using T = std::decay_t<decltype(m)>;
+        if constexpr (std::is_same_v<T, wire::SnapshotMsg>) {
+          return applySnapshotLocked(m.symbol, m.seq, m.bids, m.asks);
+        } else if constexpr (std::is_same_v<T, wire::DeltaMsg>) {
+          return applyDeltaLocked(m.symbol, Delta{m.seq, m.side, m.price, m.qty});
+        } else {
+          return applyTradeLocked(m.symbol, Trade{m.price, m.qty, m.aggressor, m.ts});
+        }
+      },
+      *decoded);
+  // 비교 실험 탭은 JSON 문자열을 기대한다(JS에 이진 바이트를 문자열로 넘길 수 없다)
+  if (known && tapListener_) after.push_back([listener = tapListener_, json = wire::toJson(*decoded)] { listener(json); });
+}
+
+bool MarketClient::applySnapshotLocked(const std::string& symbol, Seq seq, std::span<const Level> bids,
+                                       std::span<const Level> asks) {
+  auto it = symbols_.find(symbol);
+  if (it == symbols_.end()) return false;  // 구독 해제한 종목의 늦은 메시지
+  auto& data = it->second;
+  const auto event = data.sync->onSnapshot(seq, bids, asks);
+  data.lastUpdateMs = options_.nowMs();
+  if (event == SyncEvent::NeedSnapshot) requestSnapshotLocked(symbol);
+  return true;
+}
+
+bool MarketClient::applyDeltaLocked(const std::string& symbol, const Delta& delta) {
+  auto it = symbols_.find(symbol);
+  if (it == symbols_.end()) return false;
+  auto& data = it->second;
+  const auto event = data.sync->onDelta(delta);
+  if (event == SyncEvent::Applied) data.lastUpdateMs = options_.nowMs();
+  if (event == SyncEvent::NeedSnapshot) {
+    ++stats_.gaps;
+    requestSnapshotLocked(symbol);
+  }
+  return true;
+}
+
+bool MarketClient::applyTradeLocked(const std::string& symbol, const Trade& trade) {
+  auto it = symbols_.find(symbol);
+  if (it == symbols_.end()) return false;
+  auto& data = it->second;
+  data.trades.push_front(trade);
+  while (data.trades.size() > options_.tradeHistory) data.trades.pop_back();
+  data.candles->addTrade(trade.ts, trade.price, trade.qty);
+  return true;
 }
 
 void MarketClient::requestSnapshotLocked(const std::string& symbol) {

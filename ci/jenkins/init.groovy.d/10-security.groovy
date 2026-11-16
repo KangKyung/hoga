@@ -11,5 +11,5 @@ jenkins.securityRealm = realm
 def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
 strategy.allowAnonymousRead = false
 jenkins.authorizationStrategy = strategy
-jenkins.numExecutors = 6 // 병렬 단계 5개 + 여유
+jenkins.numExecutors = 8 // 병렬 단계 6개 + 여유
 jenkins.save()

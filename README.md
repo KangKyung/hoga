@@ -15,7 +15,41 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 | M3 | 로그인 · 주문 · 체결 알림 · 보안 저장소 · 기기 보안 신호 | 완료 |
 | M4 | Fabric 네이티브 캔들 차트 (iOS CoreGraphics / Android Canvas) | 완료 |
 | M5 | 웹 화면(HTML/JS·AngularJS) + 웹뷰 브리지 · AngularJS 관리 콘솔 · 분석 이벤트 분류표 · ko/en/id/th 현지화 | 완료 |
-| **M6** | Jenkins 병렬 파이프라인 · Appium 두 플랫폼 E2E · k6 부하·장애 · "JS 경유 vs C++ 직접" 비교 실험 | **완료** |
+| M6 | Jenkins 병렬 파이프라인 · Appium 두 플랫폼 E2E · k6 부하·장애 · "JS 경유 vs C++ 직접" 비교 실험 | 완료 |
+| **M7** | Redis로 gateway 여러 대 · 이진 시세 프로토콜 · 주문 OTP · 자체 릴리스 도구 hoga-cli | **완료** |
+
+### M7 요약
+
+| 주제 | 한 일 | 숫자 · 결과 |
+|---|---|---|
+| gateway 여러 대 | `ROLE=market`(시세 단일 작성자·주문·인증) + `ROLE=gateway`×N(웹소켓만, 상태 없음) + Redis Pub/Sub + nginx(`least_conn`). gateway는 market 호가를 복제해 구독 즉시 스냅샷을 준다. 멱등 키·리프레시 토큰·OTP는 Redis | 3,000명 접속 중 **gateway 1대 강제 종료(SIGKILL)** → 끊긴 999명만 다른 gateway로 재접속, 연결 성공 100%, 복구 p99 **0.76초**·최대 0.9초. 나머지 2/3는 영향 없음. market을 재시작해도 멱등 키·로그인 유지 |
+| 이진 시세 | `hoga::wire` v1(LEB128 가변 정수) C++ 코덱 + TS 인코더, 두 구현을 `shared/protocol/wire-v1.json` 골든 벡터로 서로 시험. `/ws?proto=bin`, 앱 기본값으로 채택(주문 알림·오류는 JSON 유지) | 메시지 89→21바이트(**−77%**), 3,000명 대역폭 7.1→2.1MB/s(**−71%**), 앱 C++ 수신 처리 1,133→78ns(**14.5배**), 서버 CPU는 같음 |
+| 주문 OTP | RFC 6238 TOTP(±30초, 같은 코드 재사용 금지, 5번 틀리면 5분 잠금), 시드 AES-256-GCM 암호화 저장, 주문은 10분짜리 step-up 토큰 필요. 설정에서 QR 등록, 주문 중 403이면 코드 입력 → 같은 멱등 키로 재전송. 관리 콘솔 API에 OTP 초기화 | RFC 테스트 벡터 통과, 화면의 QR을 CoreImage로 읽어 `otpauth://` 확인, iOS·Android E2E에서 시험이 인증 앱 역할을 해 주문까지 |
+| hoga-cli | `hoga status / version / changelog / release`: 4곳에 흩어진 앱 버전(package.json·version.ts·build.gradle·pbxproj) 일치, Conventional Commits 변경 로그, Android AAB·iOS 아카이브(서명 없음), 요약 JSON, Slack 웹훅(설정 시) | 0.0.1 / 1.0 / 0.5.0으로 어긋나 있던 버전을 0.7.0으로 맞춤. 릴리스 1회: AAB 31.8MB, iOS .app 79MB(JS 번들 포함) |
+
+![클러스터 + 이진 시세](docs/m7-ios-quote-cluster-binary.png)
+
+화면: [OTP 등록(QR)](docs/m7-ios-otp-enroll.png) · [주문 중 OTP 입력](docs/m7-ios-order-otp.png) · [인증 후 전량 체결](docs/m7-ios-order-otp-filled.png) · [클러스터 경유 호가(이진)](docs/m7-ios-quote-cluster-binary.png)
+
+### M7 검증 결과 (2026-11-16)
+
+| 대상 | 내용 | 결과 |
+|---|---|---|
+| C++ | `wire` 코덱(골든 벡터·잘린 입력·2^53 초과·단계 수 폭탄·끝없는 varint 거부, JSON 변환), MarketClient 이진 수신 (코어 77개, +6) | 일반 · ASan · TSan 통과 (ASan이 시험 코드의 dangling 참조를 잡아 고침) |
+| 서버 | Redis 클러스터 시험(market 1 + gateway 2를 실제 Redis로: 같은 변경분 순서, 복제 스냅샷 = market, 사용자 알림 라우팅, 관리 끊기 전파, 재시작 후 멱등 키·토큰 유지, 동시 토큰 회전 하나만 성공), TOTP RFC 벡터, OTP 잠금·암호화·step-up, 이진 골든 벡터, `?proto=bin` (vitest 68개, +25) | 통과 |
+| 앱 | OTP 상태 머신(재전송·취소·횟수 제한), 주문 중 OTP 흐름·설정 등록 화면 (Jest 46개, +5) | 통과 |
+| hoga-cli | semver·Conventional Commits·변경 로그·버전 파일 4종 쓰기(임시 저장소·git) (node:test 7개) | 통과 |
+| Appium E2E | 기존 4개 + **OTP 주문**(시험이 TOTP 계산), 클러스터(nginx → gateway 3대)에 붙여 | iOS 5/5 · Android 5/5 |
+| Jenkins | Tools 단계(hoga-cli 시험·버전 일치) 추가, C++ 단계에서 이진 벤치 결과 보관 | **#4 성공 10분 50초**, JUnit **370개 통과 · 실패 0** (C++ 77×3 · 서버 68 · 앱 46 · N-API 8 · hoga-cli 7 · E2E 5×2). #3은 iOS·Android 빌드와 겹쳐 M1의 느린 클라이언트 시험이 5초를 넘김 → 건너뛰기가 시작되면 부하 생성을 멈추게 고침 |
+
+### M7에서 찾은 것들
+
+- **맥 한 대에서는 nginx를 거치면 1만 연결 전에 임시 포트가 바닥난다.** 연결마다 k6→nginx, nginx→gateway 두 개의 임시 포트(49152–65535, 약 1.6만 개)를 쓰고, 끊긴 연결의 TIME_WAIT까지 겹쳐 gateway의 Redis 재연결까지 `EADDRNOTAVAIL`로 실패했다. 부하 측정은 k6가 gateway 포트로 직접 나눠 붙고(L4·DNS 분산과 같은 모양), nginx는 앱·기능 시험용으로 둔다. 포트 범위는 시스템 설정이라 바꾸지 않았다.
+- **gateway를 늘려도 이 맥에서는 5,000명이 한계.** 3대에서도 초당 메시지는 9.2만→12.2만으로 늘었지만 1만 명에서는 연결이 8초 SYN 재전송으로 멈췄다(CPU는 남음 → OS accept 대기열 `somaxconn` 128). 더 재려면 기계가 여러 대 필요하다.
+- **단일 프로세스의 "전달 지연"은 과소평가였다.** 같은 3,000명에서 클러스터 p95가 24→151ms로 늘어 구간을 나눠 쟀다: Redis 구간은 한가할 때 1ms, gateway가 받은 시세의 지연(`/healthz`의 `busLagMs`) p50 42ms · p99 156ms. 단일 프로세스는 market이 한 메시지를 다 보낸 뒤에야 다음 메시지 시각을 찍어 대기 시간이 숨었고, 클러스터는 시각을 먼저 찍어 그대로 드러난다. gateway 1대로 줄여도 같아 대수 문제는 아니다.
+- **주문 OTP 화면은 키보드에 가려졌다.** iOS 숫자 키패드에는 Return 키가 없어 확인 버튼이 가려지면 진행할 수 없었고, Android는 `Modal`이 별도 창이라 adjustResize가 안 먹어 입력칸까지 가려졌다(E2E가 잡음). `KeyboardAvoidingView`(두 플랫폼 padding) + 6자리가 차면 자동 확인으로 고쳤고, OTP를 기다리는 동안 원래 주문 버튼을 막아 같은 주문이 두 번 시작되지 않게 했다. 설정 화면은 입력 중 버튼이 첫 탭에 안 눌려 `keyboardShouldPersistTaps="handled"`.
+- **종료 순서 버그**: Redis를 먼저 끄면 gateway의 `quit()`가 재연결을 기다리며 끝나지 않았다 → 1초 뒤 강제 끊기 + 프로세스 10초 종료 시한, 클러스터 스크립트는 gateway → market → Redis 순서로.
+- **로컬 Maven 미러에는 디버그 aar만 있어** 릴리스 AAB가 실패 → hoga-cli는 미러에 릴리스 aar가 있을 때만(`RN_MAVEN_MIRROR`) 쓴다.
 
 ### M6 비교 실험 — 고빈도 시세를 JS로 보내면 무엇이 무너지나
 
@@ -247,6 +281,7 @@ C++ 엔진 하나를 **iOS · Android · Node 서버**가 함께 쓰는 작은 �
 hoga/
 ├─ core/                          # C++20 공용 코어 (CMake, GoogleTest, Sanitizer)
 │  ├─ include/hoga/
+│  │  ├─ wire.hpp                 # 이진 시세 형식 v1 (LEB128) — 앱이 받는 기본 형식
 │  │  ├─ core.hpp                 # 호가단위 · 호가단위 맞춤 · 가격제한폭
 │  │  ├─ order_book.hpp           # L2 호가창 (단일 작성자 + 다중 읽기, shared_mutex)
 │  │  ├─ book_sync.hpp            # seq 기반 스냅샷 + 변경분 재동기화 상태 머신
@@ -274,7 +309,12 @@ hoga/
 │  ├─ src/api/                    # REST: 인증 · 주문 (멱등 키)
 │  ├─ src/auth/                   # HS256 JWT · 사용자 · 리프레시 회전
 │  ├─ src/orders/tracker.ts       # 사용자 주문 상태 · 체결 알림
-│  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 구현)
+│  ├─ src/bus.ts                  # 메시지 전달 계층 인터페이스 (메모리 / src/redis/bus.ts)
+│  ├─ src/redis/                  # Redis 버스 · 멱등 키 · 리프레시 토큰 · OTP 저장소
+│  ├─ src/gateway/replica.ts      # gateway 전용: market 호가 복제(구독 즉시 스냅샷)
+│  ├─ src/cluster.ts              # gateway 통계 보고 · 관리 명령 전파
+│  ├─ src/wire.ts                 # 이진 시세 인코더(C++ 디코더와 골든 벡터로 맞춤)
+│  ├─ src/auth/totp.ts, otp.ts    # RFC 6238 TOTP · 주문 step-up
 │  ├─ src/api/web.ts              # 웹 화면 정적 제공 · CSP · 번역 · 종목정보 · 공지
 │  ├─ src/api/admin.ts            # 관리 API(장애 주입 · 변동성 · 연결 끊기)
 │  ├─ web/                        # 종목정보(HTML/CSS/JS) · 공지(AngularJS) · 공용 브리지·번역·분석 JS
@@ -299,6 +339,9 @@ hoga/
 │  └─ specs/bench.e2e.ts          # "JS 경유 vs C++ 직접" 측정 자동화
 ├─ loadtest/                      # k6: 주문 멱등성 · 시세 팬아웃 · 연결 끊기 복구, results/
 ├─ ci/                            # 단계별 스크립트(Jenkins·터미널 공용) · jenkins/(로컬 Jenkins 설정)
+├─ deploy/                        # 로컬 클러스터: nginx.conf.template · cluster.sh(Redis + market + gateway N)
+├─ tools/hoga-cli/                # 릴리스 도구: 버전 일치 · 변경 로그 · AAB/아카이브 · 알림
+├─ shared/protocol/wire-v1.json   # 이진 형식 골든 벡터(C++·TS 공용 시험)
 ├─ Jenkinsfile                    # 병렬 파이프라인
 └─ HogaNative.podspec             # iOS: core + turbomodule 소스를 컴파일
 ```
@@ -373,6 +416,7 @@ npm test
 | 느린 클라이언트가 서버 메모리를 잡아먹음 | 송신 버퍼가 SOFT(512KB)를 넘으면 그 종목 변경분을 건너뛰고, 버퍼가 비면 **최신 스냅샷 1개**로 따라잡게 함. HARD(1MB) 초과 시 1013으로 종료 |
 | 죽은 연결이 쌓임 | 15초 하트비트 ping, 다음 주기까지 pong 없으면 terminate |
 | 남용 | 메시지 4KB 제한, 연결당 초당 20개(토큰 버킷), 연결당 구독 20종목 |
+| gateway 장애 | gateway는 상태가 없다(호가는 market에서 복제, 토큰은 같은 키로 직접 검증) → 아무 gateway나 죽어도 그 연결만 다른 gateway로 재접속(M7: 1/3 강제 종료 시 복구 p99 0.76초) |
 | 재시작 때 일제히 재접속 | 종료 시 1012(서비스 재시작) + 재접속 창(`retry-window`, 연결 수 ÷ 초당 300) 전송 → 클라이언트는 창 안에서 흩어져 재접속(M6에서 k6로 측정해 추가) |
 | 구독자마다 직렬화 | market이 한 번 직렬화한 문자열을 그대로 전송 |
 
@@ -419,6 +463,29 @@ ci/jenkins/build.sh E2E=true BENCH=false LOAD=true
 - E2E는 플랫폼마다 서버를 따로 씁니다(iOS 8080, Android 8091을 `adb reverse tcp:8080 tcp:8091`). 장애 주입이 다른 플랫폼 시험에 섞이지 않게 하기 위해서입니다.
 - Android 17 에뮬레이터는 Metro 기본 주소(10.0.2.2)에 로컬 네트워크 권한이 필요해, 스크립트가 디버그 앱의 Metro 주소를 `localhost:8081`로 바꿉니다.
 
+### 클러스터 · 릴리스 (M7)
+
+```bash
+# Redis + market(:8200) + gateway 3대(:8201~) + nginx(:8080). 앱은 그대로 localhost:8080
+brew install redis nginx
+deploy/cluster.sh up 3
+deploy/cluster.sh status           # market readyz · gateway pid
+deploy/cluster.sh kill-gateway 1   # 장애 시험: SIGKILL
+deploy/cluster.sh down
+
+# 부하: gateway에 직접 나눠 붙기(맥 한 대에서 nginx를 거치면 임시 포트가 먼저 바닥난다)
+k6 run -e BASE=http://localhost:8080 -e WS_URLS=$(deploy/cluster.sh ws-urls) -e VUS=3000 loadtest/ws-fanout.js
+k6 run -e BASE=http://localhost:8090 -e PROTO=bin -e VUS=3000 loadtest/ws-fanout.js   # 이진 형식
+
+# 릴리스 도구
+tools/hoga-cli/bin/hoga.js status
+tools/hoga-cli/bin/hoga.js version patch --dry-run
+tools/hoga-cli/bin/hoga.js release --platform android --dry-run
+```
+
+- 관리 API에 `POST /admin/api/otp/reset {userId}`(OTP 분실 시 초기화)가 있습니다. 클러스터에서는 `/admin/api/state`가 gateway별 연결 수를 보여 줍니다.
+- gateway는 `/healthz`에 `busLagMs`(시세 시각 → 이 gateway 도착, p50·p99)와 이벤트 루프 지연을 냅니다.
+
 ### 느린 네트워크에서 설치하기
 
 RN 사전 빌드 파일 저장소(`repo.reactnative.dev`)와의 연결이 중간에 거의 멈추는 경우가 있습니다. CocoaPods와 Gradle은 느린 연결을 끊지 않고 계속 기다리므로, 멈춘 듯하면 파일을 직접 받아 로컬 경로를 지정합니다.
@@ -454,8 +521,12 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 ## 알려진 한계 / 다음 단계
 
 - 호가가격단위 · 가격제한폭은 **간소화한 규칙**입니다. KRX 규정 원문과 대조하고 출처를 남겨야 합니다.
-- 서버의 버스·멱등 저장소는 메모리 구현만 있습니다. 여러 프로세스 확장(Redis Pub/Sub, `SET NX`)은 아직 하지 않았습니다(M7 후보). 그래서 부하 시험도 gateway 1대 기준이고, "gateway 1대 장애" 대신 관리 API로 모든 연결을 끊어 재접속을 쟀습니다.
-- 리프레시 토큰·주문 기록·멱등 키가 서버 메모리에만 있어 서버를 재시작하면 다시 로그인해야 합니다.
+- market은 한 대(시세 단일 작성자)이고 매칭 엔진·주문 기록(`OrderTracker`)은 메모리라, market을 재시작하면 호가·체결 기록은 사라집니다(멱등 키·로그인·OTP는 Redis에 남음). market 이중화(리더 선출·이벤트 로그)는 하지 않았습니다.
+- Redis는 한 대이고 영속화를 끈 개발용입니다. Redis가 죽으면 gateway는 재연결을 기다리고(시세 멈춤), 복제 장부를 다시 받습니다. Sentinel·Cluster는 다루지 않았습니다.
+- 로그인 실패 횟수 제한은 아직 프로세스 메모리라 market이 여러 대면 대수만큼 느슨해집니다.
+- 이진 형식은 버전 1 하나뿐입니다. 형식을 바꿀 때는 종류 바이트를 새로 쓰거나 `proto=bin2`처럼 협상해야 합니다(앱은 첫 바이트로 JSON·이진을 가려 둘 다 읽음).
+- OTP 등록은 앱 화면에 시드를 한 번 보여 주는 방식이고, 분실 시 초기화는 관리 API로만 합니다(본인 확인 절차 없음). 주문 step-up 토큰은 10분, 앱 메모리에만 둡니다.
+- hoga-cli의 Android AAB는 디버그 키로 서명되고, iOS 아카이브는 서명하지 않습니다(개발자 계정 없음). 스토어 업로드·Fastlane 레인은 없습니다.
 - 생체 인증 경로(Face ID·지문)는 시뮬레이터·에뮬레이터에 생체 정보가 등록되지 않아 **기기에서 확인하지 못했습니다**. 생체 없는 경로(일반 Keychain·Keystore 저장, 세션 복원)만 확인했습니다.
 - Android 14+ 화면 캡처 감지(`DETECT_SCREEN_CAPTURE`)는 넣지 않았고 `FLAG_SECURE`로 차단만 합니다.
 - 인증서 고정은 서버가 아직 HTTP라 넣지 않았습니다.
@@ -463,7 +534,7 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - Android E2E 실패 화면은 `FLAG_SECURE` 때문에 검게 저장됩니다(요소 조작·읽기는 됨).
 - 비교 실험은 Debug 빌드·시뮬레이터/에뮬레이터 숫자입니다. Release 빌드·실기기, UI 스레드 프레임(iOS)은 재지 않았습니다. Android `gfxinfo` 값은 JSON에 남겼지만 에뮬레이터 주사율 변화로 비교에 쓰지 않았습니다.
 - k6와 서버를 같은 맥에서 돌려 서로 CPU를 나눠 씁니다. 숫자는 "맥 한 대" 기준이고 서버만의 한계는 아닙니다.
-- Jenkins는 로컬 한 대(에이전트 없음)이고 SCM 폴링·웹훅 없이 `build.sh`로 실행합니다. Sentry·hoga-cli 배포 도구·Redmine/SVN은 M7 후보입니다.
+- Jenkins는 로컬 한 대(에이전트 없음)이고 SCM 폴링·웹훅 없이 `build.sh`로 실행합니다. Sentry·Redmine/SVN·FCM 푸시는 하지 않았습니다.
 - 체결 메시지에는 seq가 없어 끊기면 유실될 수 있습니다(정보용으로만 사용). 재연결 후에도 이전 체결 목록은 그대로 보입니다.
 - 앱의 서버 주소는 `localhost:8080`으로 고정입니다(시뮬레이터·에뮬레이터 개발용).
 - 인증서 고정·망 전환 즉시 재연결(`NWPathMonitor`·`ConnectivityManager`)은 아직 넣지 않았습니다. 지금은 끊김을 감지한 뒤 백오프로 재접속합니다.
@@ -476,4 +547,4 @@ curl -fL -C - --retry 40 --retry-all-errors --speed-limit 30000 --speed-time 15 
 - 현지화: 종목 이름은 번역하지 않습니다. 오른쪽에서 왼쪽으로 쓰는 언어(ar)는 아직 대상이 아닙니다. 번역 검수는 원어민 확인을 거치지 않았습니다.
 - 현지화: 가격은 원화·한국 호가단위 그대로이고 자릿수 구분만 언어를 따릅니다. 시장별 호가 정책(루피아·바트)은 C++ 인터페이스로 분리하지 않았습니다.
 - Android 하드웨어 뒤로 가기(`BackHandler`)를 처리하지 않습니다. 화면 안의 ‹ 버튼으로만 이동하고, 웹뷰 안 기록(공지 상세 → 목록)도 웹 화면의 ‹ 버튼으로 돌아갑니다.
-- 다음: **M7(선택)** — Redis로 gateway 여러 대, hoga-cli 배포 도구(버전·변경 로그·Fastlane), OTP, FCM 푸시, 바이너리 프로토콜 비교.
+- 계획한 M0~M7을 마쳤습니다. 남은 후보: FCM 푸시(Firebase 계정 필요), Sentry, market 이중화, 실기기 측정.

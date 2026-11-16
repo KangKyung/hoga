@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { AuthService } from '../auth/auth.js';
+import type { OtpService } from '../auth/otp.js';
 import type { IdempotencyStore } from '../idempotency.js';
 import type { Market } from '../market/market.js';
 import type { Metrics } from '../metrics.js';
@@ -15,6 +16,8 @@ export interface OrderRouteDeps {
   store: IdempotencyStore<OrderRecord>;
   tracker: OrderTracker;
   auth: AuthService;
+  /** OTP를 켠 사용자는 x-step-up 헤더(OTP로 받은 단기 토큰)가 있어야 주문할 수 있다 */
+  otp?: OtpService;
   metrics: Metrics;
   /** 장애 주입: 처리 후 응답만 늦춘다(관리 콘솔에서 바꿀 수 있어 매번 읽는다) */
   responseDelayMs: () => number;
@@ -54,6 +57,11 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       const key = keyResult.data;
       const body = bodyResult.data;
       if (!market.has(body.symbol)) return reply.code(404).send({ error: 'UNKNOWN_SYMBOL' });
+      // 멱등 키를 잡기 전에 확인한다 → OTP 입력 뒤 같은 키로 다시 보내도 처음 주문으로 처리된다
+      const stepUp = request.headers['x-step-up'];
+      if (deps.otp && !(await deps.otp.allowsOrder(userId, typeof stepUp === 'string' ? stepUp : undefined))) {
+        return reply.code(403).send({ error: 'OTP_REQUIRED' });
+      }
 
       const storeKey = OrderTracker.userKey(userId, key);
       const begin = await store.begin(storeKey, fingerprint(body));

@@ -12,7 +12,8 @@ add_library(hoga_core STATIC
   src/matching_engine.cpp
   src/market_client.cpp
   src/candles.cpp
-  src/chart_layout.cpp)
+  src/chart_layout.cpp
+  src/wire.cpp)
 target_include_directories(hoga_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # nlohmann/json(MIT, v3.12.0)은 시세 메시지 파싱에만 쓰므로 공개 헤더에 노출하지 않는다.
 target_include_directories(hoga_core SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -55,8 +56,16 @@ if(HOGA_BUILD_TESTS)
     tests/matching_engine_test.cpp
     tests/market_client_test.cpp
     tests/candles_test.cpp
-    tests/chart_layout_test.cpp)
+    tests/chart_layout_test.cpp
+    tests/wire_test.cpp)
   target_link_libraries(hoga_core_tests PRIVATE hoga_core GTest::gtest_main)
+  target_include_directories(hoga_core_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+  target_compile_definitions(hoga_core_tests PRIVATE HOGA_SHARED_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../shared")
+
+  # JSON vs 이진 시세: MarketClient 수신 경로(파싱 + 호가 반영) 비용 비교
+  add_executable(hoga_wire_bench tests/wire_bench.cpp)
+  target_link_libraries(hoga_wire_bench PRIVATE hoga_core)
+  target_include_directories(hoga_wire_bench SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
   include(GoogleTest)
   gtest_discover_tests(hoga_core_tests)
 endif()

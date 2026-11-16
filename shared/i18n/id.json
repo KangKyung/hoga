@@ -168,5 +168,24 @@
   "bench.received": "Pesan / dtk",
   "bench.run": "Ukur {n} dtk",
   "bench.running": "Mengukur… {n}",
-  "bench.hint": "Naikkan kecepatan tick di konsol admin, lalu ukur tiap mode"
+  "bench.hint": "Naikkan kecepatan tick di konsol admin, lalu ukur tiap mode",
+
+  "order.otpRequired": "Akun ini memerlukan OTP sebelum memesan",
+  "order.otpPlaceholder": "Kode 6 digit dari aplikasi autentikator",
+  "order.otpSubmit": "Verifikasi lalu pesan",
+  "order.otpCancel": "Batalkan pesanan",
+  "order.otpInvalid": "Kode salah. Masukkan kode berikutnya.",
+  "order.otpLocked": "Terlalu banyak kode salah. OTP dikunci 5 menit.",
+  "order.otpCancelled": "OTP dibatalkan, pesanan tidak dikirim.",
+  "settings.otp": "OTP pesanan (verifikasi 2 langkah)",
+  "settings.otpOn": "Aktif — kode diminta tiap 10 menit sebelum memesan",
+  "settings.otpOff": "Nonaktif",
+  "settings.otpEnroll": "Atur OTP",
+  "settings.otpEnrollHint": "Pindai QR dengan aplikasi autentikator (mis. Google Authenticator) atau ketik kunci di bawah, lalu masukkan kode 6 digit. Kunci hanya ditampilkan sekali.",
+  "settings.otpKey": "Kunci pengaturan",
+  "settings.otpConfirm": "Konfirmasi dan aktifkan",
+  "settings.otpDisable": "Matikan OTP",
+  "settings.otpCodePlaceholder": "Kode 6 digit",
+  "settings.otpInvalid": "Kode salah",
+  "settings.otpLocked": "Terkunci 5 menit karena terlalu banyak kode salah"
 }

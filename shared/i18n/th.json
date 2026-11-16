@@ -168,5 +168,24 @@
   "bench.received": "ข้อความ / วินาที",
   "bench.run": "วัด {n} วินาที",
   "bench.running": "กำลังวัด… {n}",
-  "bench.hint": "เพิ่มความเร็วติกในคอนโซลผู้ดูแล แล้ววัดแต่ละโหมด"
+  "bench.hint": "เพิ่มความเร็วติกในคอนโซลผู้ดูแล แล้ววัดแต่ละโหมด",
+
+  "order.otpRequired": "บัญชีนี้ต้องยืนยัน OTP ก่อนส่งคำสั่ง",
+  "order.otpPlaceholder": "รหัส 6 หลักจากแอปยืนยันตัวตน",
+  "order.otpSubmit": "ยืนยันแล้วส่งคำสั่ง",
+  "order.otpCancel": "ยกเลิกคำสั่ง",
+  "order.otpInvalid": "รหัสไม่ถูกต้อง กรุณาใส่รหัสใหม่",
+  "order.otpLocked": "ใส่รหัสผิดหลายครั้ง ล็อก OTP 5 นาที",
+  "order.otpCancelled": "ยกเลิก OTP จึงไม่ได้ส่งคำสั่ง",
+  "settings.otp": "OTP สำหรับคำสั่ง (ยืนยัน 2 ขั้นตอน)",
+  "settings.otpOn": "เปิดอยู่ — ขอรหัสทุก 10 นาทีก่อนส่งคำสั่ง",
+  "settings.otpOff": "ปิด",
+  "settings.otpEnroll": "ตั้งค่า OTP",
+  "settings.otpEnrollHint": "สแกน QR ด้วยแอปยืนยันตัวตน (เช่น Google Authenticator) หรือพิมพ์คีย์ด้านล่าง แล้วใส่รหัส 6 หลักเพื่อยืนยัน คีย์จะแสดงเพียงครั้งเดียว",
+  "settings.otpKey": "คีย์ตั้งค่า",
+  "settings.otpConfirm": "ยืนยันและเปิดใช้",
+  "settings.otpDisable": "ปิด OTP",
+  "settings.otpCodePlaceholder": "รหัส 6 หลัก",
+  "settings.otpInvalid": "รหัสไม่ถูกต้อง",
+  "settings.otpLocked": "ล็อก 5 นาทีเพราะใส่รหัสผิดหลายครั้ง"
 }

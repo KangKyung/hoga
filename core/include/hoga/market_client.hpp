@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -141,6 +142,11 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   void onMessage(std::uint64_t generation, const std::string& text);
   void onClose(std::uint64_t generation, int code, const std::string& reason);
   void handleMessageLocked(const std::string& text, Deferred& after);
+  void handleBinaryLocked(const std::string& bytes, Deferred& after);
+  // 구독 중인 종목이면 반영하고 true(JSON·이진 공용)
+  bool applySnapshotLocked(const std::string& symbol, Seq seq, std::span<const Level> bids, std::span<const Level> asks);
+  bool applyDeltaLocked(const std::string& symbol, const Delta& delta);
+  bool applyTradeLocked(const std::string& symbol, const Trade& trade);
   void sendAuthLocked();
   void requestSnapshotLocked(const std::string& symbol);
   void onSnapshotResponse(const std::string& symbol, int status, const std::string& body);

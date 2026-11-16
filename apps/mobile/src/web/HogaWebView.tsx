@@ -7,9 +7,9 @@ import {track, trackFromWeb} from '../analytics/analytics';
 import {SERVER} from '../config';
 import {getLocale, t} from '../i18n';
 import {colors} from '../theme';
+import {APP_VERSION} from '../version';
 import {BRIDGE_PROTOCOL, isAllowedUrl, parseWebMessage, RateLimiter, toWebScript, type AppToWeb, type WebToApp} from './bridge';
 
-const APP_VERSION = '0.5.0';
 const ALLOWED_ORIGINS = [SERVER.http];
 
 // react-native-webview 14.0.1 타입 정의는 제네릭 기본값이 undefined라 props가 never가 된다 → object로 지정

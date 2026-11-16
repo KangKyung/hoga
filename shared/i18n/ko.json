@@ -168,5 +168,24 @@
   "bench.received": "초당 수신 메시지",
   "bench.run": "{n}초 측정",
   "bench.running": "측정 중… {n}",
-  "bench.hint": "관리 콘솔에서 시세 속도를 올린 뒤 두 모드를 각각 측정하세요"
+  "bench.hint": "관리 콘솔에서 시세 속도를 올린 뒤 두 모드를 각각 측정하세요",
+
+  "order.otpRequired": "이 계정은 주문 전 OTP 인증이 필요합니다",
+  "order.otpPlaceholder": "인증 앱의 6자리 코드",
+  "order.otpSubmit": "인증 후 주문",
+  "order.otpCancel": "주문 취소",
+  "order.otpInvalid": "코드가 맞지 않습니다. 새 코드로 다시 입력하세요.",
+  "order.otpLocked": "여러 번 틀려 5분 동안 OTP를 쓸 수 없습니다.",
+  "order.otpCancelled": "OTP 인증을 취소해 주문하지 않았습니다.",
+  "settings.otp": "주문 OTP(2단계 인증)",
+  "settings.otpOn": "사용 중 — 주문 전 10분마다 코드 확인",
+  "settings.otpOff": "사용 안 함",
+  "settings.otpEnroll": "OTP 등록",
+  "settings.otpEnrollHint": "인증 앱(Google Authenticator 등)으로 QR을 찍거나 아래 키를 입력한 뒤, 앱에 뜬 6자리 코드를 넣어 확인하세요. 이 키는 다시 보여 주지 않습니다.",
+  "settings.otpKey": "설정 키",
+  "settings.otpConfirm": "확인하고 켜기",
+  "settings.otpDisable": "OTP 끄기",
+  "settings.otpCodePlaceholder": "6자리 코드",
+  "settings.otpInvalid": "코드가 맞지 않습니다",
+  "settings.otpLocked": "여러 번 틀려 5분 동안 잠겼습니다"
 }

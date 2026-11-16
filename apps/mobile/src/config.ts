@@ -6,8 +6,15 @@
  */
 const HOST = 'localhost:8080';
 
+/**
+ * 시세 형식. 'bin'이면 시세(호가·체결)를 이진(wire v1)으로 받는다. 주문 알림·오류는 언제나 JSON.
+ * 측정(M7): 메시지 89→21바이트(데이터 −71%), C++ 수신 처리 1.13→0.08µs/건. 서버 CPU는 같다.
+ * 디버깅 때 프록시에서 시세를 눈으로 보려면 'json'으로 바꾼다(C++가 두 형식을 모두 읽는다).
+ */
+export const MARKET_WIRE: 'json' | 'bin' = 'bin';
+
 export const SERVER = {
-  ws: `ws://${HOST}/ws`,
+  ws: `ws://${HOST}/ws${MARKET_WIRE === 'bin' ? '?proto=bin' : ''}`,
   http: `http://${HOST}`,
 };
 

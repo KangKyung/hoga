@@ -25,7 +25,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
     const body = loginBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'BAD_REQUEST' });
     try {
-      return auth.login(body.data.username, body.data.password);
+      return await auth.login(body.data.username, body.data.password);
     } catch (err) {
       if (err instanceof AuthError) return reply.code(STATUS[err.code]).send({ error: err.code });
       throw err;
@@ -37,7 +37,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
     const body = refreshBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'BAD_REQUEST' });
     try {
-      return auth.rotate(body.data.refreshToken);
+      return await auth.rotate(body.data.refreshToken);
     } catch (err) {
       if (err instanceof AuthError) return reply.code(STATUS[err.code]).send({ error: err.code });
       throw err;
@@ -46,7 +46,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
 
   app.post('/auth/logout', async (request, reply) => {
     const body = refreshBody.safeParse(request.body);
-    if (body.success) auth.logout(body.data.refreshToken);
+    if (body.success) await auth.logout(body.data.refreshToken);
     return reply.code(204).send();
   });
 }

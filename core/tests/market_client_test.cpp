@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "hoga/market_client.hpp"
+#include "hoga/wire.hpp"
 
 using namespace std::chrono_literals;
 using hoga::ConnectionState;
@@ -375,4 +376,33 @@ TEST(MarketClient, BuildsCandlesFromHistoryAndLiveTrades) {
   EXPECT_EQ(bars[1].volume, 5);
   // 5분 봉은 읽을 때 묶는다
   EXPECT_EQ(f.client->candles("000001", 300000, 10).size(), 1u);
+}
+
+TEST(MarketClient, AppliesBinaryMarketDataLikeJson) {
+  using namespace hoga::wire;
+  Fixture f;
+  f.client->subscribe({"000001"});
+  f.client->start();
+  f.transport->open();
+  f.transport->message(encode(SnapshotMsg{"000001", 10, 0, {{71'200, 100}}, {{71'300, 5}}}));
+  f.transport->message(encode(DeltaMsg{"000001", 11, 0, hoga::Side::Bid, 71'200, 90}));
+  std::vector<std::string> tapped;
+  f.client->setMarketTapListener([&](const std::string& json) { tapped.push_back(json); });
+  f.transport->message(encode(TradeMsg{"000001", 1'000, 71'300, 3, hoga::Side::Bid}));
+  ASSERT_EQ(tapped.size(), 1u);
+  EXPECT_EQ(tapped[0], R"({"t":"trade","sym":"000001","ts":1000,"px":71300,"qty":3,"aggr":"B"})");
+  f.client->setMarketTapListener({});
+  const auto view = f.client->book("000001", 10);
+  EXPECT_EQ(view.sync, SyncState::Live);
+  EXPECT_EQ(view.seq, 11u);
+  EXPECT_EQ(view.bids, (std::vector<Level>{{71'200, 90}}));
+  ASSERT_EQ(f.client->trades("000001", 5).size(), 1u);
+  EXPECT_EQ(f.client->trades("000001", 5)[0].price, 71'300);
+  // 누락 감지도 같은 규칙
+  f.transport->message(encode(DeltaMsg{"000001", 13, 0, hoga::Side::Bid, 71'100, 1}));
+  EXPECT_EQ(f.client->stats().gaps, 1u);
+  // 깨진 이진 메시지는 세고 버린다(연결 유지)
+  f.transport->message(std::string("\x02" "0000", 5));
+  EXPECT_EQ(f.client->stats().parseErrors, 1u);
+  EXPECT_EQ(f.client->stats().state, ConnectionState::Open);
 }

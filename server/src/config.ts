@@ -40,6 +40,8 @@ const schema = z.object({
   ACCESS_TOKEN_TTL_SEC: z.coerce.number().int().min(10).default(15 * 60),
   REFRESH_TOKEN_TTL_SEC: z.coerce.number().int().min(60).default(7 * 24 * 60 * 60),
   LOGIN_MAX_FAILURES_PER_MIN: z.coerce.number().int().min(1).default(5),
+  /** OTP 시드 암호화 키(AES-256-GCM, 이 값의 SHA-256). 운영에서는 KMS 등에서 받은 무작위 값으로 */
+  OTP_ENC_KEY: z.string().min(16).default('hoga-dev-only-otp-key-change-me'),
 
   // ---- 웹 화면 · 관리 콘솔 ----
   /** 관리 콘솔 API 토큰(x-admin-token). 운영에서는 반드시 바꾸고, 관리 경로는 내부망에서만 연다 */
@@ -50,12 +52,24 @@ const schema = z.object({
     .regex(/^GTM-[A-Z0-9]{4,12}$/)
     .optional(),
 
-  /** 사용 예정: Redis 연결(M6). 지금은 메모리 구현만 사용 */
+  // ---- 여러 프로세스(M7) ----
+  /**
+   * all: 한 프로세스에 전부(개발 기본) · market: 시세 단일 작성자 + REST(주문·인증·관리)
+   * gateway: WebSocket 팬아웃만(여러 대). market·gateway는 REDIS_URL이 필요하다
+   */
+  ROLE: z.enum(['all', 'market', 'gateway']).default('all'),
+  /** 있으면 버스·멱등 키·리프레시 토큰을 Redis에 둔다(ROLE=all에서도) */
   REDIS_URL: z.string().optional(),
+  /** gateway가 복제 장부의 스냅샷을 받을 market 주소 */
+  MARKET_URL: z.string().default('http://127.0.0.1:8200'),
+  /** gateway 이름(관리 콘솔 표시용). 기본: gw-<포트> */
+  GATEWAY_ID: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema>;
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
-  return schema.parse(env);
+  const config = schema.parse(env);
+  if (config.ROLE !== 'all' && !config.REDIS_URL) throw new Error(`ROLE=${config.ROLE} requires REDIS_URL`);
+  return config;
 }

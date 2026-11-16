@@ -7,6 +7,7 @@ import type { Bus, MessageKind } from '../bus.js';
 import type { Config } from '../config.js';
 import type { Metrics } from '../metrics.js';
 import { clientMessage, type ErrorMessage, type ServerMessage, type SnapshotMessage } from '../protocol.js';
+import { encode, encodeJson } from '../wire.js';
 
 export interface SnapshotProvider {
   has(symbol: string): boolean;
@@ -37,6 +38,8 @@ interface Client {
   alive: boolean;
   tokens: number;
   lastRefill: number;
+  /** /ws?proto=bin: 시세(snap·delta·trade)를 이진 프레임으로(wire v1). 나머지는 JSON 그대로 */
+  binary: boolean;
 }
 
 /** 서비스 재시작: 클라이언트는 지터를 둔 백오프로 다시 접속해야 한다 */
@@ -85,7 +88,7 @@ export class Gateway {
     private readonly authenticate: Authenticator = () => undefined,
   ) {
     this.wss = new WebSocketServer({ server, path: '/ws', maxPayload: config.WS_MAX_PAYLOAD_BYTES });
-    this.wss.on('connection', (ws) => this.onConnection(ws));
+    this.wss.on('connection', (ws, request) => this.onConnection(ws, /[?&]proto=bin(&|$)/.test(request.url ?? '')));
     this.unsubscribeBus = bus.subscribeAll((symbol, kind, payload) => this.fanOut(symbol, kind, payload));
     this.unsubscribeUsers = bus.subscribeUsers((userId, payload) => this.sendToUser(userId, payload));
     this.heartbeat = setInterval(() => this.checkHeartbeats(), config.WS_HEARTBEAT_MS);
@@ -127,7 +130,7 @@ export class Gateway {
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
   }
 
-  private onConnection(ws: WebSocket): void {
+  private onConnection(ws: WebSocket, binary = false): void {
     if (this.closing) {
       ws.close(CLOSE_SERVICE_RESTART, 'service restart');
       return;
@@ -140,6 +143,7 @@ export class Gateway {
       alive: true,
       tokens: this.config.WS_MSG_RATE_PER_SEC,
       lastRefill: Date.now(),
+      binary,
     };
     this.clients.add(client);
     this.log.debug({ client: client.id }, 'ws connected');
@@ -256,10 +260,13 @@ export class Gateway {
   private fanOut(symbol: string, kind: MessageKind, payload: string): void {
     const subscribers = this.bySymbol.get(symbol);
     if (!subscribers) return;
-    for (const client of subscribers) this.deliver(client, symbol, kind, payload);
+    // 이진 구독자가 있을 때만, 메시지마다 한 번만 바꾼다(구독자 수와 무관)
+    let binary: Buffer | undefined;
+    const binaryOf = () => (binary ??= encodeJson(payload)!);
+    for (const client of subscribers) this.deliver(client, symbol, kind, payload, binaryOf);
   }
 
-  private deliver(client: Client, symbol: string, kind: MessageKind, payload: string): void {
+  private deliver(client: Client, symbol: string, kind: MessageKind, payload: string, binaryOf: () => Buffer): void {
     const { ws } = client;
     if (ws.readyState !== WebSocket.OPEN) return;
     const buffered = ws.bufferedAmount;
@@ -291,12 +298,16 @@ export class Gateway {
       return;
     }
 
-    ws.send(payload);
+    ws.send(client.binary ? binaryOf() : payload);
     this.metrics.inc('hoga_ws_messages_sent_total');
   }
 
   private sendJson(client: Client, message: ServerMessage): void {
     if (client.ws.readyState !== WebSocket.OPEN) return;
+    if (client.binary && message.t === 'snap') {
+      client.ws.send(encode(message));
+      return;
+    }
     client.ws.send(JSON.stringify(message));
     this.metrics.inc('hoga_ws_messages_sent_total');
   }

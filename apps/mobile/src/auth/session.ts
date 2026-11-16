@@ -2,6 +2,7 @@ import {useSyncExternalStore} from 'react';
 
 import {HttpError, request, setTokenSource} from '../api/http';
 import {track} from '../analytics/analytics';
+import {clearStepUp} from './otp';
 import {t, type MessageKey} from '../i18n';
 import {hogaCore} from '../native/hogaCore';
 import {secureStore, secureStoreErrorCode} from '../native/security';
@@ -130,6 +131,7 @@ class SessionManager {
       }).catch(() => {});
     }
     await this.clear();
+    clearStepUp();
     this.set({status: 'signedOut'});
   }
 

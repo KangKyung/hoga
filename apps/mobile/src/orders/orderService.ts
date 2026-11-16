@@ -1,4 +1,5 @@
 import {HttpError, NetworkError, TimeoutError, request} from '../api/http';
+import {stepUpToken} from '../auth/otp';
 import {ORDER_TIMEOUT_MS} from '../config';
 import {hogaCore} from '../native/hogaCore';
 import {secureStore} from '../native/security';
@@ -54,8 +55,14 @@ async function post(key: string, draft: OrderDraft): Promise<PostResult> {
       method: 'POST',
       auth: true,
       timeoutMs: ORDER_TIMEOUT_MS,
-      headers: {'idempotency-key': key},
-      body: {symbol: draft.symbol, side: draft.side, type: draft.type, qty: draft.qty, ...(draft.type === 'limit' ? {price: draft.price} : {})},
+      headers: {'idempotency-key': key, ...(stepUpToken() ? {'x-step-up': stepUpToken()!} : {})},
+      body: {
+        symbol: draft.symbol,
+        side: draft.side,
+        type: draft.type,
+        qty: draft.qty,
+        ...(draft.type === 'limit' ? {price: draft.price} : {}),
+      },
     });
     return {kind: 'ok', record: data};
   } catch (e) {
@@ -63,6 +70,7 @@ async function post(key: string, draft: OrderDraft): Promise<PostResult> {
     if (e instanceof HttpError) {
       // 처리 중·과부하·서버 오류는 결과를 모르는 것 → 조회로 확정
       if (e.status === 409 || e.status === 429 || e.status >= 500) return {kind: 'unknown'};
+      if (e.status === 403 && e.body.error === 'OTP_REQUIRED') return {kind: 'otp_required'};
       return {kind: 'error', message: e.body.error ?? `HTTP_${e.status}`};
     }
     return {kind: 'unknown'};
@@ -92,7 +100,8 @@ const deps: OrderDeps = {
 };
 
 export const orderService = {
-  place: (draft: OrderDraft, onProgress: (p: OrderProgress) => void) => runPlaceOrder(draft, deps, onProgress),
+  place: (draft: OrderDraft, onProgress: (p: OrderProgress) => void, requestOtp?: () => Promise<boolean>) =>
+    runPlaceOrder(draft, {...deps, requestOtp}, onProgress),
   reconcile: async () => runReconcile(await pendingOrders.list(), deps),
   list: async (symbol?: string) =>
     (await request<OrderRecord[]>(`/orders${symbol ? `?symbol=${symbol}` : ''}`, {auth: true})).data,

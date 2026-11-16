@@ -5,8 +5,9 @@
  * 2. 서버 응답 지연 중 주문 → "확인 중" → 조회로 확정(실패로 보지 않음)
  * 3. seq 누락 주입 → 앱이 감지하고 스냅샷으로 다시 맞춤
  * 4. 웹뷰 종목정보의 매수 버튼 → 네이티브 주문 창(웹은 주문을 직접 내지 못함)
+ * 5. OTP를 켠 계정의 주문 → 코드 입력 창 → 인증 후 같은 주문 번호로 접수(시험이 인증 앱 역할)
  */
-import {admin, byId, exists, goHome, resetFaults, scrollTo, signInFresh, t, tap, tapIfPresent, textOf, waitForText} from '../support/app.js';
+import {admin, api, byId, exists, goHome, resetFaults, scrollTo, signInFresh, t, tap, tapIfPresent, textOf, totp, waitForText} from '../support/app.js';
 
 const FINAL = [t('order.accepted'), t('order.filled', {filled: ''}).split('(')[0]!, t('order.partial', {filled: '', resting: ''}).split(' ')[0]!];
 const isFinal = (s: string) => FINAL.some(prefix => s.startsWith(prefix.trim()));
@@ -83,5 +84,34 @@ describe('Hoga MTS', () => {
     expect(await textOf('fromWebNotice')).toBe(t('order.fromWeb'));
     // 웹은 주문을 직접 내지 않는다: 사용자가 누르기 전까지 주문 결과가 없다
     expect(await exists('orderProgress', 500)).toBe(false);
+  });
+
+  it('asks for an OTP before ordering when the account has OTP on', async () => {
+    // 서버 API로 trader2의 OTP를 켠다(사용자가 설정 화면에서 하는 일과 같은 API). 지난 실행이 남긴 OTP는 관리자 초기화
+    await admin('POST', '/otp/reset', {userId: 'u-trader2'});
+    const login = await api('/auth/login', {username: 'trader2', password: 'hoga-trader-5678'});
+    const token = login.body.accessToken!;
+    const enroll = await api('/auth/otp/enroll', {}, token);
+    expect(enroll.status).toBe(200);
+    const secret = enroll.body.secret!;
+    expect((await api('/auth/otp/confirm', {code: totp(secret)}, token)).status).toBe(200);
+    try {
+      await signInFresh({username: 'trader2', password: 'hoga-trader-5678'});
+      await tap('watch-000001');
+      await tap('buyButton');
+      await tap('submitOrder');
+      await waitForText('orderProgress', s => s === t('order.otpRequired'), 15_000, 'otp required');
+      // 등록 확인에 쓴 구간 코드는 재사용 금지라 다음 구간 코드를 넣는다(±1 허용)
+      // 6자리를 넣으면 앱이 바로 확인한다(버튼을 누를 필요 없음)
+      await byId('otpCode').setValue(totp(secret, 1));
+      await waitForText('orderProgress', isFinal, 20_000, 'order after otp');
+    } finally {
+      // 정리 중 오류가 원래 실패를 가리지 않게 따로 잡는다
+      await admin('POST', '/otp/reset', {userId: 'u-trader2'}).catch(() => {});
+      await tapIfPresent('orderDone', 300);
+      await tapIfPresent('closeOrder', 300);
+      await goHome();
+      await signInFresh().catch(e => console.warn('cleanup sign-in failed:', e));
+    }
   });
 });

@@ -1,5 +1,7 @@
 import {
+  MAX_OTP_PROMPTS,
   MAX_SENDS,
+  OTP_CANCELLED,
   UNCONFIRMED,
   placeOrder,
   reconcilePending,
@@ -124,4 +126,34 @@ test('reconcilePending: 접수된 것·도착 안 한 것·아직 모르는 것�
   expect(result.notSent.map(o => o.key)).toEqual(['b']);
   expect(result.stillUnknown.map(o => o.key)).toEqual(['c']);
   expect(removed).toEqual(['a', 'b']); // 모르는 것은 남겨 둔다
+});
+
+describe('OTP step-up', () => {
+  it('asks for an OTP, then resends with the same key', async () => {
+    const {deps, sentKeys, pending} = fakeDeps([{kind: 'otp_required'}, {kind: 'ok', record: record('key-1')}]);
+    deps.requestOtp = jest.fn(async () => true);
+    const phases: string[] = [];
+    const result = await placeOrder(draft, deps, p => phases.push(p.phase));
+    expect(result.phase).toBe('accepted');
+    expect(sentKeys).toEqual(['key-1', 'key-1']);
+    expect(phases).toEqual(['submitting', 'otp', 'submitting', 'accepted']);
+    expect(pending.size).toBe(0);
+  });
+
+  it('cancelling the OTP fails the order without leaving an unconfirmed record', async () => {
+    const {deps, pending} = fakeDeps([{kind: 'otp_required'}]);
+    deps.requestOtp = jest.fn(async () => false);
+    const result = await placeOrder(draft, deps);
+    expect(result).toMatchObject({phase: 'failed', message: OTP_CANCELLED});
+    expect(pending.size).toBe(0); // 서버가 받지 않은 주문이라 다시 확인할 필요 없음
+  });
+
+  it('gives up after a few OTP prompts (and without a prompt handler)', async () => {
+    const {deps} = fakeDeps(Array(10).fill({kind: 'otp_required'}));
+    deps.requestOtp = jest.fn(async () => true);
+    expect(await placeOrder(draft, deps)).toMatchObject({phase: 'failed', message: OTP_CANCELLED});
+    expect(deps.requestOtp).toHaveBeenCalledTimes(MAX_OTP_PROMPTS);
+    const bare = fakeDeps([{kind: 'otp_required'}]).deps;
+    expect(await placeOrder(draft, bare)).toMatchObject({phase: 'failed', message: OTP_CANCELLED});
+  });
 });

@@ -3,7 +3,8 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import type { Gateway } from '../gateway/gateway.js';
+import type { OtpService } from '../auth/otp.js';
+import type { GatewayControl } from '../cluster.js';
 import type { Market } from '../market/market.js';
 import type { Metrics } from '../metrics.js';
 
@@ -15,9 +16,12 @@ export interface FaultState {
 export interface AdminDeps {
   token: string;
   market: Market;
-  gateway: Gateway;
+  /** 한 프로세스면 Gateway, 여러 프로세스면 Redis로 gateway들을 보는 ClusterGateways */
+  gateway: GatewayControl;
   metrics: Metrics;
   faults: FaultState;
+  /** 고객센터 기능: OTP 분실 시 초기화(본인 확인은 운영 절차로) */
+  otp?: OtpService;
 }
 
 const faultsBody = z
@@ -63,6 +67,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): void
       /** 대시보드: 콘솔이 1초마다 읽어 초당 값은 직전 값과의 차이로 계산한다 */
       scope.get('/state', async () => ({
         ts: Date.now(),
+        gateways: gateway.gateways ? await gateway.gateways() : undefined,
         faults: { ...market.faults, orderDelayMs: faults.orderDelayMs },
         symbols: market.list().map((s) => ({
           code: s.code,
@@ -72,8 +77,8 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): void
           volatility: market.volatility(s.code),
         })),
         counters: {
-          connections: gateway.connectionCount,
-          messagesSent: metrics.sum('hoga_ws_messages_sent_total'),
+          connections: await gateway.connectionCount(),
+          messagesSent: gateway.messagesSent ? await gateway.messagesSent() : metrics.sum('hoga_ws_messages_sent_total'),
           deltas: metrics.sum('hoga_market_deltas_total'),
           deltasDropped: metrics.sum('hoga_market_deltas_dropped_total'),
           trades: metrics.sum('hoga_market_trades_total'),
@@ -109,8 +114,19 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminDeps): void
         return { ok: true };
       });
 
+      /** OTP 초기화(기기 분실 등). 감사 로그로 남긴다 */
+      scope.post('/otp/reset', async (request, reply) => {
+        const parsed = z.object({ userId: z.string().min(1).max(64) }).strict().safeParse(request.body);
+        if (!parsed.success || !deps.otp) return reply.code(400).send({ error: 'BAD_REQUEST' });
+        await deps.otp.reset(parsed.data.userId);
+        metrics.inc('hoga_admin_actions_total', { action: 'otp_reset' });
+        request.log.warn({ userId: parsed.data.userId }, 'admin: OTP reset');
+        return { ok: true };
+      });
+
       /** 지금 연결된 클라이언트를 모두 끊는다(재접속·재동기화 시연) */
       scope.post('/disconnect', async (request) => {
+        // 여러 프로세스면 관리 채널로 알리기만 하고 수는 모른다(null)
         const closed = gateway.disconnectAll();
         metrics.inc('hoga_admin_actions_total', { action: 'disconnect' });
         request.log.warn({ closed }, 'admin: disconnected all clients');

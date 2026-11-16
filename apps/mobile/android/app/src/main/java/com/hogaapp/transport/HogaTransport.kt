@@ -12,6 +12,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 
 /**
  * Android 플랫폼 전송 계층. C++ 코어의 hoga::ITransport 구현(AndroidTransport.cpp)이 JNI로 만들고 호출한다.
@@ -109,6 +110,12 @@ class HogaTransport(nativePtr: Long) {
       deliver { ptr -> nativeOnMessage(ptr, token, text) }
     }
 
+    // 이진 시세(wire v1). 바이트 배열 그대로 C++로 넘긴다(문자열로 바꾸면 UTF-8 변환에서 깨진다)
+    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+      val array = bytes.toByteArray()
+      deliver { ptr -> nativeOnBinary(ptr, token, array) }
+    }
+
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
       webSocket.close(code, null)
       deliver { ptr -> nativeOnClose(ptr, token, code, reason) }
@@ -139,6 +146,8 @@ class HogaTransport(nativePtr: Long) {
     @JvmStatic private external fun nativeOnOpen(ptr: Long, token: Long)
 
     @JvmStatic private external fun nativeOnMessage(ptr: Long, token: Long, text: String)
+
+    @JvmStatic private external fun nativeOnBinary(ptr: Long, token: Long, bytes: ByteArray)
 
     @JvmStatic private external fun nativeOnClose(ptr: Long, token: Long, code: Int, reason: String)
 

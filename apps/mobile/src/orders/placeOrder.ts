@@ -9,6 +9,7 @@ import type {OrderDraft, OrderRecord, PendingOrder} from './types';
  *       │                                     ├─ 있음 ─────────▶ accepted / rejected
  *       │                                     ├─ 처리 중(202) ─▶ 잠시 후 다시 조회
  *       │                                     └─ 없음(404) ────▶ 같은 키로 다시 전송
+ *       ├─ 403 OTP_REQUIRED ─▶ otp(코드 입력) ─ 맞음 ─▶ 같은 키로 다시 submitting / 취소 ─▶ failed
  *       └─ 400·422 등 확정 오류 ─────────────▶ failed
  *
  * 원칙
@@ -17,7 +18,7 @@ import type {OrderDraft, OrderRecord, PendingOrder} from './types';
  * - 보내기 전에 미확정 주문으로 먼저 기록(write-ahead). 앱이 도중에 죽어도 다음 실행 때 확정한다.
  * - 끝까지 확정 못 하면 "실패"라고 단정하지 않고, 확인할 수 없었다고 알린다.
  */
-export type OrderPhase = 'submitting' | 'confirming' | 'accepted' | 'rejected' | 'failed';
+export type OrderPhase = 'submitting' | 'otp' | 'confirming' | 'accepted' | 'rejected' | 'failed';
 
 export interface OrderProgress {
   phase: OrderPhase;
@@ -27,7 +28,12 @@ export interface OrderProgress {
   message?: string;
 }
 
-export type PostResult = {kind: 'ok'; record: OrderRecord} | {kind: 'unknown'} | {kind: 'error'; message: string};
+export type PostResult =
+  | {kind: 'ok'; record: OrderRecord}
+  | {kind: 'unknown'}
+  | {kind: 'error'; message: string}
+  /** OTP를 켠 사용자: 서버가 멱등 키를 잡기 전에 거절했다(같은 키로 다시 보내도 된다) */
+  | {kind: 'otp_required'};
 export type LookupResult = {kind: 'found'; record: OrderRecord} | {kind: 'in_progress'} | {kind: 'not_found'} | {kind: 'unknown'};
 
 export interface OrderDeps {
@@ -41,7 +47,13 @@ export interface OrderDeps {
   };
   sleep(ms: number): Promise<void>;
   now(): number;
+  /** 사용자에게 OTP를 받아 인증(verify)까지 끝내면 true, 취소하면 false */
+  requestOtp?(): Promise<boolean>;
 }
+
+/** OTP를 몇 번까지 다시 물을지(틀린 코드·만료) */
+export const MAX_OTP_PROMPTS = 3;
+export const OTP_CANCELLED = 'OTP_CANCELLED';
 
 export const MAX_SENDS = 3;
 export const LOOKUPS_PER_SEND = 3;
@@ -68,9 +80,18 @@ export async function placeOrder(
     return p;
   };
 
+  let otpPrompts = 0;
   for (let attempt = 1; attempt <= MAX_SENDS; attempt++) {
     onProgress({phase: 'submitting', key, attempt});
-    const posted = await deps.post(key, draft);
+    let posted = await deps.post(key, draft);
+    while (posted.kind === 'otp_required') {
+      // 서버는 이 주문을 받지 않았다 → 미확정 기록 없이 끝내거나, 인증 뒤 같은 키로 다시 보낸다
+      onProgress({phase: 'otp', key, attempt});
+      const ok = otpPrompts++ < MAX_OTP_PROMPTS && deps.requestOtp ? await deps.requestOtp() : false;
+      if (!ok) return finish({phase: 'failed', key, attempt, message: OTP_CANCELLED});
+      onProgress({phase: 'submitting', key, attempt});
+      posted = await deps.post(key, draft);
+    }
     if (posted.kind === 'ok') return finish(settle(key, attempt, posted.record));
     if (posted.kind === 'error') return finish({phase: 'failed', key, attempt, message: posted.message});
 
