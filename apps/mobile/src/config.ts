@@ -3,8 +3,11 @@
  * iOS 시뮬레이터는 Mac의 localhost에 바로 닿는다.
  * Android 에뮬레이터는 `adb reverse tcp:8080 tcp:8080` 후 localhost로 접속한다
  * (Android 17의 로컬 네트워크 권한 없이 동작).
+ * CI E2E는 개발 서버와 겹치지 않게 전용 포트의 서버를 쓰고, 그 주소를 Metro가 번들에 넣는다
+ * (babel.config.js의 HOGA_DEV_SERVER_HOST). 개발 빌드에서만 쓰고 릴리스는 언제나 기본값이다.
  */
-const HOST = 'localhost:8080';
+declare const process: {env: {HOGA_DEV_SERVER_HOST?: string}}; // RN이 process.env를 둔다(Node 타입은 쓰지 않는다)
+const HOST = (__DEV__ && process.env.HOGA_DEV_SERVER_HOST) || 'localhost:8080';
 
 /**
  * 시세 형식. 'bin'이면 시세(호가·체결)를 이진(wire v1)으로 받는다. 주문 알림·오류는 언제나 JSON.

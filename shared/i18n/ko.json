@@ -105,6 +105,7 @@
   "banner.reconcile": "이전 주문 정리: {parts}",
   "banner.reconcileConfirmed": "접수 확인 {n}건",
   "banner.reconcileNotSent": "전송되지 않은 주문 {n}건(다시 보내지 않음)",
+  "banner.reconcileLost": "서버 재시작으로 사라진 주문 {n}건",
   "banner.reconcileUnknown": "아직 확인 중 {n}건",
 
   "web.loading": "불러오는 중…",
@@ -213,6 +214,8 @@
 
   "reject.EXCEEDS_OPEN_QTY": "미체결 잔량보다 많습니다",
   "reject.MARKET_CLOSED": "장이 종료되어 주문할 수 없습니다",
+  "reject.NO_ACCOUNT": "계좌 정보가 없습니다. 다시 로그인해 주세요",
+  "reject.ORDER_LOST_ON_RESTART": "서버가 다시 시작되어 이 주문은 처리되지 않았습니다. 주문 내역을 확인한 뒤 다시 주문해 주세요",
   "reject.MARKET_IN_AUCTION": "단일가 매매 중에는 지정가만 가능합니다",
   "reject.INSUFFICIENT_CASH": "주문가능금액이 부족합니다",
   "reject.INSUFFICIENT_QTY": "매도가능수량이 부족합니다",

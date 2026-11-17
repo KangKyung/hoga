@@ -33,4 +33,6 @@ export interface PendingOrder {
   key: string;
   draft: OrderDraft;
   createdAt: number;
+  /** 주문한 사용자. 같은 기기에서 다른 사용자가 로그인해도 남의 주문을 조회(404 → "전송 안 됨")하지 않게 */
+  userId?: string;
 }

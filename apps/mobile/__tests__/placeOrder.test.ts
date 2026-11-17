@@ -1,6 +1,7 @@
 import {
   MAX_OTP_PROMPTS,
   MAX_SENDS,
+  ORDER_LOST,
   OTP_CANCELLED,
   UNCONFIRMED,
   placeOrder,
@@ -101,17 +102,27 @@ test('끝까지 확정하지 못하면 "확인 불가"로 끝내고 미확정 �
   expect(pending.has('key-1')).toBe(true); // 다음 실행 때 reconcilePending이 확인
 });
 
+test('서버 재시작으로 사라진 주문(410)은 다시 보내지 않고 실패로 끝낸다', async () => {
+  const {deps, pending, sentKeys} = fakeDeps([{kind: 'unknown'}], [{kind: 'lost'}]);
+  const result = await placeOrder(draft, deps);
+  expect(result).toMatchObject({phase: 'failed', message: ORDER_LOST});
+  expect(sentKeys).toEqual(['key-1']);
+  expect(pending.size).toBe(0);
+});
+
 test('reconcilePending: 접수된 것·도착 안 한 것·아직 모르는 것을 나눈다', async () => {
   const list: PendingOrder[] = [
     {key: 'a', draft, createdAt: 0},
     {key: 'b', draft, createdAt: 0},
     {key: 'c', draft, createdAt: 0},
+    {key: 'd', draft, createdAt: 0},
   ];
   const removed: string[] = [];
   const results: Record<string, LookupResult> = {
     a: {kind: 'found', record: record('a')},
     b: {kind: 'not_found'},
     c: {kind: 'unknown'},
+    d: {kind: 'lost'},
   };
   const result = await reconcilePending(list, {
     lookup: async k => results[k]!,
@@ -125,7 +136,8 @@ test('reconcilePending: 접수된 것·도착 안 한 것·아직 모르는 것�
   expect(result.confirmed.map(r => r.key)).toEqual(['a']);
   expect(result.notSent.map(o => o.key)).toEqual(['b']);
   expect(result.stillUnknown.map(o => o.key)).toEqual(['c']);
-  expect(removed).toEqual(['a', 'b']); // 모르는 것은 남겨 둔다
+  expect(result.lost.map(o => o.key)).toEqual(['d']);
+  expect(removed).toEqual(['a', 'b', 'd']); // 모르는 것은 남겨 둔다
 });
 
 describe('OTP step-up', () => {

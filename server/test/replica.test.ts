@@ -75,4 +75,43 @@ describe('BookReplica — market 재시작', () => {
     await replica.resyncAll();
     expect(restarts).toHaveLength(1);
   });
+
+  it('기다리는 동안 늦게 받은 종목의 seq 감소는 이번 재시작으로 끝난다(다음 평범한 재구독에서 다시 끊지 않는다)', async () => {
+    const market = fakeMarket(['000001', '000002']);
+    const restarts: number[] = [];
+    const replica = new BookReplica('http://market', market.fetch, Date.now, () => restarts.push(1));
+    await replica.start();
+
+    market.epoch = 'e2';
+    market.seq.set('000001', 3);
+    market.seq.set('000002', 4);
+    market.failNext.set('000002', 1); // 대기 중 재시도에서 seq 감소(5000 → 4)를 본다
+    await replica.resyncAll();
+    expect(restarts).toHaveLength(1);
+
+    await replica.resyncAll(); // 같은 세대의 버스 재구독
+    expect(restarts).toHaveLength(1);
+  });
+
+  it('15초 안에 받지 못한 종목은 나중에 live가 되면 그 종목 구독자만 다시 접속시킨다', async () => {
+    const market = fakeMarket(['000001', '000002']);
+    let clock = 0;
+    const restarts: number[] = [];
+    const late: string[] = [];
+    // 시계를 부를 때마다 1초씩 흐르게 해 15초 마감을 바로 넘긴다
+    const replica = new BookReplica('http://market', market.fetch, () => (clock += 1_000), () => restarts.push(1), (s) => late.push(s));
+    await replica.start();
+
+    market.epoch = 'e2';
+    market.failNext.set('000002', 1_000);
+    await replica.resyncAll();
+    expect(restarts).toHaveLength(1);
+    expect(replica.isLive('000002')).toBe(false);
+    expect(late).toEqual([]);
+
+    market.failNext.set('000002', 0);
+    await new Promise((r) => setTimeout(r, 700));
+    expect(replica.isLive('000002')).toBe(true);
+    expect(late).toEqual(['000002']);
+  });
 });

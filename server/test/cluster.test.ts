@@ -156,13 +156,16 @@ describe.skipIf(!hasRedis)('cluster: market + gateways over Redis', () => {
     const order = { symbol: '000001', side: 'bid', type: 'limit', price: 60_000, qty: 2 };
     const headers = { authorization: `Bearer ${body.accessToken as string}`, 'idempotency-key': 'restart-key-0001' };
     const created = await post(`${first.url()}/orders`, order, headers);
+    expect(created.status).toBe(200);
     await running.pop()!.stop(); // market 재시작
 
     const second = await market();
+    // 키는 Redis에 남아 다시 실행하지 않는다. 하지만 그 주문은 재시작으로 사라졌으므로 옛 결과(200)가 아니라
+    // 재전송·조회 모두 410으로 알린다(앱이 지금 엔진에 없는 주문을 "접수됨"으로 끝내지 않게)
     const replayed = await post(`${second.url()}/orders`, order, headers);
-    expect(replayed.status).toBe(200);
-    expect(replayed.headers.get('idempotent-replayed')).toBe('true');
-    expect(replayed.body.orderId).toBe(created.body.orderId);
+    expect(replayed).toMatchObject({ status: 410, body: { error: 'ORDER_LOST_ON_RESTART' } });
+    const looked = await fetch(`${second.url()}/orders/restart-key-0001`, { headers: { authorization: headers.authorization } });
+    expect(looked.status).toBe(410);
     // 재시작 전에 받은 리프레시 토큰으로 계속 로그인 유지
     const rotated = await post(`${second.url()}/auth/refresh`, { refreshToken: body.refreshToken });
     expect(rotated.status).toBe(200);

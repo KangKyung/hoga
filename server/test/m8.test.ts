@@ -9,6 +9,9 @@ import { createServer, type HogaServer } from '../src/app.js';
 import { TEST_OPTIONS } from './fixtures.js';
 import { maskBirth, maskName, maskPhone } from '../src/api/accountOpen.js';
 import { compareVersions } from '../src/api/appConfig.js';
+import { signAccessToken } from '../src/auth/jwt.js';
+import { InMemoryIdempotencyStore } from '../src/idempotency.js';
+import type { OrderRecord } from '../src/orders/tracker.js';
 import { loadConfig } from '../src/config.js';
 import { krxPhase } from '../src/market/session.js';
 import type { ServerMessage, StatusMessage } from '../src/protocol.js';
@@ -17,9 +20,9 @@ const servers: HogaServer[] = [];
 const ADMIN = { 'x-admin-token': 'hoga-admin-dev-token' };
 const PASSWORDS: Record<string, string> = { demo: 'hoga-demo-1234', trader2: 'hoga-trader-5678' };
 
-async function start(env: Record<string, string> = {}) {
+async function start(env: Record<string, string> = {}, options = TEST_OPTIONS) {
   const server = createServer(
-    loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0', HISTORY_MINUTES: '0', ...env }), TEST_OPTIONS);
+    loadConfig({ PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SIM_INTERVAL_MS: '0', HISTORY_MINUTES: '0', ...env }), options);
   await server.start();
   servers.push(server);
   return server;
@@ -125,6 +128,35 @@ describe('계좌: 잔고·주문가능·체결 반영', () => {
     const oversell = await order(server, 'demo', { symbol: '000001', side: 'ask', price: 80_000, qty: 41 });
     expect(oversell.body.reject).toBe('INSUFFICIENT_QTY');
     expect((await account(server)).positions.find((p) => p.symbol === '000001')?.sellable).toBe(40);
+  });
+
+  it('원장 계좌가 없는 사용자(재시작으로 사라진 개설 계좌의 남은 토큰)는 주문할 수 없다', async () => {
+    const server = await start();
+    // market 재시작 뒤를 흉내: 서명은 유효하지만 사용자·원장은 없다
+    const ghost = signAccessToken('hoga-dev-only-secret-change-me', { sub: 'u-gone', name: '사라진 사용자' }, 900);
+    const before = server.market.snapshot('000001').seq;
+    const res = await call(server, 'POST', '/orders', { symbol: '000001', side: 'bid', type: 'market', qty: 1_000_000 }, {
+      authorization: `Bearer ${ghost}`,
+      'idempotency-key': randomUUID(),
+    });
+    expect(res).toMatchObject({ status: 403, body: { error: 'NO_ACCOUNT' } });
+    expect(server.market.snapshot('000001').seq).toBe(before);
+  });
+
+  it('재시작 전 market이 처리하고 잃은 주문은 재전송·조회 모두 410 ORDER_LOST_ON_RESTART', async () => {
+    // Redis 구성 흉내: 멱등 키는 재시작 뒤에도 남고, 주문 기록·엔진·원장은 비어 있다
+    const idempotency = new InMemoryIdempotencyStore<OrderRecord>(60_000);
+    const before = await start({}, { ...TEST_OPTIONS, idempotency });
+    const key = randomUUID();
+    const body = { symbol: '000001', side: 'bid', price: 70_000, qty: 10 };
+    expect((await order(before, 'demo', body, key)).body.status).toBe('NEW');
+    await servers.pop()!.stop();
+
+    const after = await start({}, { ...TEST_OPTIONS, idempotency });
+    expect(await order(after, 'demo', body, key)).toMatchObject({ status: 410, body: { error: 'ORDER_LOST_ON_RESTART' } });
+    expect(await as(after, 'demo', 'GET', `/orders/${key}`)).toMatchObject({ status: 410, body: { error: 'ORDER_LOST_ON_RESTART' } });
+    // 원장에 옛 예약이 생기지 않는다
+    expect((await account(after)).reservedCash).toBe(0);
   });
 
   it('체결되면 예수금·보유 수량·평균단가가 바뀐다', async () => {

@@ -105,6 +105,7 @@
   "banner.reconcile": "คำสั่งก่อนหน้า: {parts}",
   "banner.reconcileConfirmed": "ยืนยันแล้ว {n} รายการ",
   "banner.reconcileNotSent": "ไม่ได้ส่ง {n} รายการ (ไม่ส่งซ้ำ)",
+  "banner.reconcileLost": "คำสั่ง {n} รายการหายไปเมื่อเซิร์ฟเวอร์เริ่มใหม่",
   "banner.reconcileUnknown": "ยังตรวจสอบอยู่ {n} รายการ",
 
   "web.loading": "กำลังโหลด…",
@@ -213,6 +214,8 @@
 
   "reject.EXCEEDS_OPEN_QTY": "มากกว่าจำนวนที่ค้างอยู่",
   "reject.MARKET_CLOSED": "ตลาดปิดแล้ว",
+  "reject.NO_ACCOUNT": "ไม่พบบัญชี โปรดเข้าสู่ระบบอีกครั้ง",
+  "reject.ORDER_LOST_ON_RESTART": "เซิร์ฟเวอร์เริ่มใหม่และคำสั่งนี้ไม่ได้ถูกเก็บไว้ โปรดตรวจสอบคำสั่งแล้วส่งใหม่",
   "reject.MARKET_IN_AUCTION": "ระหว่างประมูลรับเฉพาะคำสั่งราคาจำกัด",
   "reject.INSUFFICIENT_CASH": "อำนาจซื้อไม่พอ",
   "reject.INSUFFICIENT_QTY": "จำนวนหุ้นที่ขายได้ไม่พอ",

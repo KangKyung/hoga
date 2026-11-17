@@ -350,9 +350,35 @@ TEST(MarketClient, ForwardsOrderEventsToListener) {
   f.client->start();
   f.transport->open();
   const std::string event = R"({"t":"order","key":"k1","orderId":3,"symbol":"000001","status":"FILLED"})";
+  f.transport->message(event);  // authed 전: 버린다
+  EXPECT_TRUE(events.empty());
+  f.transport->message(R"({"t":"authed","userId":"u-demo"})");
   f.transport->message(event);
-  ASSERT_EQ(events.size(), 1u);
-  EXPECT_EQ(events[0], event);
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[1], event);
+}
+
+TEST(MarketClient, DropsPreviousUsersOrderEventsUntilNewTokenIsAuthed) {
+  Fixture f;
+  std::vector<std::string> events;
+  f.client->setUserEventListener([&](const std::string& json) { events.push_back(json); });
+  f.client->setAuthToken("token-a");
+  f.client->start();
+  f.transport->open();
+  f.transport->message(R"({"t":"authed","userId":"u-a"})");
+  events.clear();
+
+  // 로그아웃 → 곧바로 B로 로그인. 서버가 unauth·auth를 처리하기 전에 A의 알림이 도착한다
+  f.client->setAuthToken("");
+  f.client->setAuthToken("token-b");
+  f.transport->message(R"({"t":"order","key":"a-1","orderId":7,"symbol":"000001","status":"FILLED"})");
+  EXPECT_TRUE(events.empty());
+
+  f.transport->message(R"({"t":"unauthed"})");
+  f.transport->message(R"({"t":"authed","userId":"u-b"})");
+  f.transport->message(R"({"t":"order","key":"b-1","orderId":8,"symbol":"000001","status":"NEW"})");
+  ASSERT_EQ(events.size(), 2u);  // authed(u-b), 그다음 B의 알림
+  EXPECT_NE(events[1].find("b-1"), std::string::npos);
 }
 
 TEST(MarketClient, LogoutSendsUnauthAndDropsLateOrderEvents) {
@@ -395,6 +421,41 @@ TEST(MarketClient, LogoutSendsUnauthAndDropsLateOrderEvents) {
   const auto sent = f.transport->sent.size();
   f.client->setAuthToken("");
   EXPECT_EQ(f.transport->sent.size(), sent);
+}
+
+namespace {
+// 서명은 서버가 보므로 시험에서는 payload만 맞으면 된다
+std::string fakeJwt(const std::string& payloadB64url) { return "eyJhbGciOiJIUzI1NiJ9." + payloadB64url + ".sig"; }
+}  // namespace
+
+TEST(MarketClient, IgnoresLateAuthedFromThePreviousUsersToken) {
+  Fixture f;
+  std::vector<std::string> events;
+  f.client->setUserEventListener([&](const std::string& json) { events.push_back(json); });
+  const auto tokenA = fakeJwt("eyJzdWIiOiJ1LWEifQ");  // {"sub":"u-a"}
+  const auto tokenB = fakeJwt("eyJzdWIiOiJ1LWIifQ");  // {"sub":"u-b"}
+  f.client->setAuthToken(tokenA);
+  f.client->start();
+  f.transport->open();
+  f.transport->message(R"({"t":"authed","userId":"u-a"})");
+  EXPECT_TRUE(f.client->stats().authenticated);
+
+  // A가 갱신(auth A2)한 직후 로그아웃 → B 로그인. 서버는 authed(A) → A 알림 → unauthed → authed(B) 순으로 보낸다
+  f.client->setAuthToken(fakeJwt("eyJzdWIiOiJ1LWEiLCJqdGkiOiIyIn0"));  // {"sub":"u-a","jti":"2"}
+  f.client->setAuthToken("");
+  f.client->setAuthToken(tokenB);
+  events.clear();
+  f.transport->message(R"({"t":"authed","userId":"u-a"})");
+  EXPECT_FALSE(f.client->stats().authenticated);
+  f.transport->message(R"({"t":"order","key":"a-1","orderId":7,"symbol":"000001","status":"FILLED"})");
+  EXPECT_TRUE(events.empty());
+
+  f.transport->message(R"({"t":"unauthed"})");
+  f.transport->message(R"({"t":"authed","userId":"u-b"})");
+  EXPECT_TRUE(f.client->stats().authenticated);
+  f.transport->message(R"({"t":"order","key":"b-1","orderId":8,"symbol":"000001","status":"NEW"})");
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_NE(events[1].find("b-1"), std::string::npos);
 }
 
 TEST(MarketClient, MarketTapSeesEveryMarketMessageOutsideTheLock) {

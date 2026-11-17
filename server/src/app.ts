@@ -21,7 +21,7 @@ import type { Config } from './config.js';
 import { coreVersion } from './core.js';
 import { Gateway } from './gateway/gateway.js';
 import { BookReplica } from './gateway/replica.js';
-import { InMemoryIdempotencyStore } from './idempotency.js';
+import { InMemoryIdempotencyStore, type IdempotencyStore } from './idempotency.js';
 import { Market, type MarketOptions } from './market/market.js';
 import { MarketSession } from './market/session.js';
 import { Metrics } from './metrics.js';
@@ -51,6 +51,8 @@ export interface HogaServer {
 
 export interface CreateServerOptions {
   market?: MarketOptions;
+  /** 시험용: 재시작 전후에 같은 멱등 키 저장소를 쓰게(Redis 흉내) */
+  idempotency?: IdempotencyStore<OrderRecord>;
 }
 
 function authConfig(config: Config) {
@@ -79,9 +81,9 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
     historyMinutes: config.HISTORY_MINUTES,
     ...options.market,
   });
-  const store = redisBus
+  const store = options.idempotency ?? (redisBus
     ? new RedisIdempotencyStore<OrderRecord>(redisBus.client, config.IDEMPOTENCY_TTL_MS)
-    : new InMemoryIdempotencyStore<OrderRecord>(config.IDEMPOTENCY_TTL_MS);
+    : new InMemoryIdempotencyStore<OrderRecord>(config.IDEMPOTENCY_TTL_MS));
   const tracker = new OrderTracker(market, bus);
   const session = new MarketSession(market, bus, {
     clock: config.SESSION_CLOCK,
@@ -193,7 +195,7 @@ export function createServer(config: Config, options: CreateServerOptions = {}):
   });
 
   let stopSimulator = () => {};
-  const sweeper = setInterval(() => store.sweep(), 60_000);
+  const sweeper = setInterval(() => (store as { sweep?: () => number }).sweep?.(), 60_000);
   sweeper.unref();
 
   return {
@@ -256,7 +258,10 @@ export function createGatewayServer(config: Config): GatewayServer {
   const onMarketRestart = () => {
     log.warn({ closed: gateway.disconnectAll('market restart') }, 'market restarted: reconnecting clients');
   };
-  const replica = new BookReplica(config.MARKET_URL, undefined, undefined, onMarketRestart);
+  const onSymbolRestart = (symbol: string) => {
+    log.warn({ symbol, closed: gateway.disconnectSubscribers(symbol, 'market restart') }, 'market restarted: late symbol, reconnecting its subscribers');
+  };
+  const replica = new BookReplica(config.MARKET_URL, undefined, undefined, onMarketRestart, onSymbolRestart);
   // 복제 장부를 gateway보다 먼저 구독해, 같은 메시지에서 장부가 먼저 바뀐 뒤 클라이언트로 나간다
   bus.subscribeAll((symbol, kind, payload) => {
     if (kind === 'book') replica.onBook(symbol, payload);

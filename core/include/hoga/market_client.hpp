@@ -178,6 +178,8 @@ class MarketClient : public std::enable_shared_from_this<MarketClient> {
   UserEventListener userListener_;
   MarketTapListener tapListener_;
   std::string authToken_;
+  /// 지금 토큰의 사용자(JWT sub). authed가 이 사용자 것일 때만 인증된 것으로 본다(이전 토큰의 늦은 authed를 거른다)
+  std::string authUserId_;
 
   std::map<std::string, SymbolData, std::less<>> symbols_;
   ConnectionState state_{ConnectionState::Idle};

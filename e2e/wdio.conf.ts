@@ -2,7 +2,8 @@
  * Appium + WebdriverIO 설정 하나로 iOS·Android를 모두 돌린다.
  * PLATFORM=ios|android 로 capability만 바꾸고, 테스트 코드는 한 벌이다(요소는 RN testID로 찾는다).
  *
- * 필요한 것: 서버(localhost:8080), Metro(8081), 부팅된 시뮬레이터/에뮬레이터, Appium(4723).
+ * 필요한 것: 서버(HOGA_SERVER, 기본 localhost:8080), Metro(기본 8081), 부팅된 시뮬레이터/에뮬레이터, Appium(APPIUM_PORT, 기본 4723).
+ * CI(ci/e2e.sh)는 개발 서버와 겹치지 않는 전용 포트를 넘긴다. iOS의 Metro 주소는 IOS_JS_LOCATION(실행 인자)으로.
  * 앱은 미리 빌드해 둔다. 경로는 IOS_APP / ANDROID_APK로 바꿀 수 있다.
  */
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -20,6 +21,7 @@ const ios = {
   ...(process.env.IOS_UDID ? {'appium:udid': process.env.IOS_UDID} : {}),
   'appium:app': process.env.IOS_APP ?? path.join(mobile, 'ios/build/dd/Build/Products/Debug-iphonesimulator/HogaApp.app'),
   'appium:bundleId': 'org.reactjs.native.example.HogaApp',
+  ...(process.env.IOS_JS_LOCATION ? {'appium:processArguments': {args: ['-RCT_jsLocation', process.env.IOS_JS_LOCATION]}} : {}),
   'appium:noReset': true,
   'appium:newCommandTimeout': 240,
   'appium:wdaLaunchTimeout': 240_000,

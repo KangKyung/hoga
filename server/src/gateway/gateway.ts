@@ -128,6 +128,14 @@ export class Gateway {
     return count;
   }
 
+  /** 한 종목의 구독자만 다시 접속시킨다(재시작 뒤 늦게 다시 받은 종목 — 그 사이 옛 장부를 받은 구독자) */
+  disconnectSubscribers(symbol: string, why: string): number {
+    const subscribers = [...(this.bySymbol.get(symbol) ?? [])];
+    const reason = retryReason(why, reconnectWindowMs(subscribers.length, this.config.WS_RECONNECT_ACCEPT_PER_SEC));
+    for (const client of subscribers) client.ws.close(CLOSE_SERVICE_RESTART, reason);
+    return subscribers.length;
+  }
+
   /** 정상 종료: 새 연결을 받지 않고 기존 연결에 1012를 보낸다 */
   async close(): Promise<void> {
     if (this.closing) return;

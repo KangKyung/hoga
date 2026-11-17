@@ -41,6 +41,20 @@ describe('web pages', () => {
     }
   });
 
+  it('keeps the security headers on percent-encoded paths', async () => {
+    const server = await start();
+    for (const url of ['/%77eb/stock/index.html', '/%61dmin/index.html', '/web/stock/%69ndex.html']) {
+      const res = await server.app.inject({ url });
+      expect(res.statusCode).toBe(200);
+      expect(String(res.headers['content-security-policy'])).toContain("frame-ancestors 'none'");
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+    }
+    // HTML이 아닌 정적 파일도 /web/ 아래면 nosniff
+    const js = await server.app.inject({ url: '/%77eb/stock/stock.js' });
+    expect(js.statusCode).toBe(200);
+    expect(js.headers['x-content-type-options']).toBe('nosniff');
+  });
+
   it('allows the GTM host only when a container is configured', async () => {
     const plain = await start();
     expect((await plain.app.inject({ url: '/web-config.js' })).body).toContain('"gtmContainerId":null');

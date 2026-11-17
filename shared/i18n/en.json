@@ -105,6 +105,7 @@
   "banner.reconcile": "Earlier orders: {parts}",
   "banner.reconcileConfirmed": "{n} confirmed",
   "banner.reconcileNotSent": "{n} never sent (not resent)",
+  "banner.reconcileLost": "{n} lost in a server restart",
   "banner.reconcileUnknown": "{n} still checking",
 
   "web.loading": "Loading…",
@@ -213,6 +214,8 @@
 
   "reject.EXCEEDS_OPEN_QTY": "More than the open quantity",
   "reject.MARKET_CLOSED": "The market is closed",
+  "reject.NO_ACCOUNT": "No account found. Please sign in again",
+  "reject.ORDER_LOST_ON_RESTART": "The server restarted and this order was not kept. Check your orders and place it again",
   "reject.MARKET_IN_AUCTION": "Only limit orders during the auction",
   "reject.INSUFFICIENT_CASH": "Not enough buying power",
   "reject.INSUFFICIENT_QTY": "Not enough shares to sell",

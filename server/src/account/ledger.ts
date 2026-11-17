@@ -137,7 +137,8 @@ export class Ledger {
     order: { side: 'bid' | 'ask'; type: 'limit' | 'market'; price: number; qty: number },
     releasing?: { key: string; qty: number },
   ): RejectReason {
-    if (!this.accounts.has(userId)) return 'NONE'; // 계좌 없는 사용자(시험용)는 확인하지 않는다
+    // 계좌 없는 사용자는 주문 API가 먼저 403 NO_ACCOUNT로 막는다(api/orders.ts). 여기서는 확인할 원장이 없을 뿐
+    if (!this.accounts.has(userId)) return 'NONE';
     const limits = this.limits(userId, symbol);
     if (releasing) {
       const r = this.require(userId).reservations.get(releasing.key);

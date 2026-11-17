@@ -9,3 +9,8 @@ export RN_ARTIFACTS="${RN_ARTIFACTS:-$HOME/.hoga-ci/rn-artifacts}"
 export RN_MAVEN_MIRROR="${RN_MAVEN_MIRROR:-$HOME/.m2/rn-mirror}"
 REPORTS="$ROOT/reports"
 mkdir -p "$REPORTS/junit"
+# E2E 전용 포트(개발용 서버 8080 · Metro 8081 · Appium 4723과 겹치지 않게)
+export E2E_IOS_SERVER_PORT="${E2E_IOS_SERVER_PORT:-18080}"
+export E2E_ANDROID_SERVER_PORT="${E2E_ANDROID_SERVER_PORT:-18091}"
+export E2E_METRO_PORT="${E2E_METRO_PORT:-18081}"
+export E2E_APPIUM_PORT="${E2E_APPIUM_PORT:-14723}"

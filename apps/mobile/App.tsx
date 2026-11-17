@@ -103,6 +103,7 @@ function Main({userName}: {userName: string}) {
         const parts = [];
         if (r.confirmed.length) parts.push(t('banner.reconcileConfirmed', {n: r.confirmed.length}));
         if (r.notSent.length) parts.push(t('banner.reconcileNotSent', {n: r.notSent.length}));
+        if (r.lost.length) parts.push(t('banner.reconcileLost', {n: r.lost.length}));
         if (r.stillUnknown.length) parts.push(t('banner.reconcileUnknown', {n: r.stillUnknown.length}));
         if (parts.length) banner.show(t('banner.reconcile', {parts: parts.join(' · ')}));
       })
@@ -118,7 +119,7 @@ function Main({userName}: {userName: string}) {
       const now = Date.now();
       if (now - last < AUTH_RETRY_MS || session.getState().status !== 'signedIn') return;
       last = now;
-      void session.tokens.refresh();
+      session.tokens.refresh().catch(() => {});
     });
     return () => sub.remove();
   }, []);

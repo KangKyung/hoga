@@ -470,7 +470,7 @@ test('최소 버전보다 낮으면 업데이트 화면만, 점검 중이면 점
     await flush();
   });
   expect(r!.root.findAllByProps({testID: 'maintenance'}).length).toBeGreaterThan(0);
-  r!.unmount();
+  await ReactTestRenderer.act(async () => r!.unmount());
 });
 
 test('계좌 화면: 잔고·미체결을 보여 주고, 정정은 같은 주문 창을 정정 모드로 연다', async () => {

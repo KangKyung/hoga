@@ -105,6 +105,7 @@
   "banner.reconcile": "Order sebelumnya: {parts}",
   "banner.reconcileConfirmed": "{n} terkonfirmasi",
   "banner.reconcileNotSent": "{n} tidak terkirim (tidak dikirim ulang)",
+  "banner.reconcileLost": "{n} pesanan hilang saat server dimulai ulang",
   "banner.reconcileUnknown": "{n} masih diperiksa",
 
   "web.loading": "Memuat…",
@@ -213,6 +214,8 @@
 
   "reject.EXCEEDS_OPEN_QTY": "Melebihi sisa order",
   "reject.MARKET_CLOSED": "Pasar sudah tutup",
+  "reject.NO_ACCOUNT": "Akun tidak ditemukan. Silakan masuk lagi",
+  "reject.ORDER_LOST_ON_RESTART": "Server dimulai ulang dan pesanan ini tidak tersimpan. Periksa pesanan Anda lalu kirim lagi",
   "reject.MARKET_IN_AUCTION": "Hanya order limit saat lelang",
   "reject.INSUFFICIENT_CASH": "Dana tidak mencukupi",
   "reject.INSUFFICIENT_QTY": "Saham tidak mencukupi",

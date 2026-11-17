@@ -48,6 +48,36 @@ std::string escapeSymbol(const std::string& symbol) {
   return out;
 }
 
+// JWT의 sub(사용자 ID). 서명은 서버가 확인하므로 여기서는 payload만 읽는다. 형식이 아니면 빈 문자열
+std::string jwtSubject(const std::string& token) {
+  const auto first = token.find('.');
+  const auto second = first == std::string::npos ? std::string::npos : token.find('.', first + 1);
+  if (second == std::string::npos) return {};
+  std::string decoded;
+  std::uint32_t buffer = 0;
+  int bits = 0;
+  for (std::size_t i = first + 1; i < second; ++i) {
+    const char c = token[i];
+    int v;
+    if (c >= 'A' && c <= 'Z') v = c - 'A';
+    else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+    else if (c >= '0' && c <= '9') v = c - '0' + 52;
+    else if (c == '-') v = 62;
+    else if (c == '_') v = 63;
+    else return {};
+    buffer = (buffer << 6) | static_cast<std::uint32_t>(v);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      decoded.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+    }
+  }
+  const auto payload = json::parse(decoded, nullptr, /*allow_exceptions=*/false);
+  if (!payload.is_object()) return {};
+  const auto sub = payload.find("sub");
+  return sub != payload.end() && sub->is_string() ? sub->get<std::string>() : std::string{};
+}
+
 }  // namespace
 
 std::string_view toString(ConnectionState state) noexcept {
@@ -214,6 +244,7 @@ void MarketClient::setAuthToken(std::string token) {
   std::lock_guard lock(mutex_);
   const bool hadToken = !authToken_.empty();
   authToken_ = std::move(token);
+  authUserId_ = jwtSubject(authToken_);
   stats_.authenticated = false;
   if (authToken_.empty()) {
     // 로그아웃: 연결(시세 구독)은 그대로 두고 서버에 사용자 인증만 풀어 달라고 한다.
@@ -332,12 +363,16 @@ void MarketClient::handleMessageLocked(const std::string& text, Deferred& after)
   try {
     const auto type = msg.value("t", std::string{});
     if (type == "order") {
-      // 로그아웃 직후 이미 오고 있던 알림은 버린다(서버가 unauth를 처리하기 전 메시지)
-      if (authToken_.empty()) return;
+      // 지금 토큰의 authed를 받기 전 알림은 버린다. 로그아웃 직후(서버가 unauth를 처리하기 전)나
+      // 곧바로 다른 계정으로 로그인한 사이 오던 이전 사용자의 알림이 새 사용자 화면에 들어가지 않게.
+      // 같은 사용자의 토큰 갱신 사이에 버린 알림은 authed를 받은 앱이 REST로 다시 조회해 메운다
+      if (authToken_.empty() || !stats_.authenticated) return;
       if (userListener_) after.push_back([listener = userListener_, text] { listener(text); });
       return;
     }
     if (type == "authed") {
+      // 로그아웃 → 다른 계정 로그인 사이에 이전 토큰의 authed가 늦게 오면 새 사용자의 인증으로 착각하지 않는다
+      if (!authUserId_.empty() && msg.value("userId", std::string{}) != authUserId_) return;
       stats_.authenticated = true;
       // 앱에도 알린다: 인증이 끊겼던 사이(토큰 만료·재연결) 놓친 주문 알림을 REST로 다시 조회하게
       if (!authToken_.empty() && userListener_) after.push_back([listener = userListener_, text] { listener(text); });

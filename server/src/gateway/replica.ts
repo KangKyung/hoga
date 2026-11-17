@@ -12,6 +12,7 @@
  *   market-started 알림·버스 재구독 → 세대 확인 + 전 종목 다시 받기 → 세대가 바뀌었으면(또는 seq가 줄었으면)
  *   **모든 종목이 다시 live가 된 뒤** 한 번 onMarketRestart(gateway는 클라이언트를 1012로 재접속).
  * 일부 종목만 받은 상태에서 끊으면, 그 사이 재접속한 클라이언트가 아직 옛 장부인 종목을 받아 멈추기 때문이다.
+ * 15초 안에 다 받지 못하면 그대로 끊고, 늦게 live가 된 종목은 그 종목 구독자만 한 번 더 끊는다(onSymbolRestart).
  */
 import type { DeltaMessage, SnapshotMessage, StatusMessage, WireLevel } from '../protocol.js';
 import type { SnapshotProvider } from './gateway.js';
@@ -42,6 +43,8 @@ export class BookReplica implements SnapshotProvider {
   private resyncing: Promise<void> | undefined;
   /** 다시 받기가 진행 중일 때 또 요청이 오면 끝난 뒤 한 번 더 */
   private resyncAgain = false;
+  /** 재시작으로 끊을 때 아직 옛 장부였던 종목. 그 사이 재접속한 구독자는 옛 seq를 받았으니 live가 되면 다시 끊는다 */
+  private readonly lateAfterRestart = new Set<string>();
 
   constructor(
     private readonly marketUrl: string,
@@ -52,6 +55,7 @@ export class BookReplica implements SnapshotProvider {
     },
     private readonly now: () => number = Date.now,
     private readonly onMarketRestart: () => void = () => {},
+    private readonly onSymbolRestart: (symbol: string) => void = () => {},
   ) {}
 
   /** market의 종목 목록을 받아 모든 종목의 스냅샷을 채운다 */
@@ -129,12 +133,14 @@ export class BookReplica implements SnapshotProvider {
     for (const book of this.books.values()) book.live = false;
     await Promise.all([...this.books.keys()].map((symbol) => this.load(symbol)));
     if (!epochChanged && !this.seqDropped) return;
-    this.seqDropped = false;
     // 실패한 종목은 load가 500ms마다 다시 받는다. 전부 live가 될 때까지(최대 15초) 기다린 뒤 한 번만 끊는다
     const deadline = this.now() + 15_000;
     while ([...this.books.values()].some((b) => !b.live) && this.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
+    // 기다리는 동안 늦게 받은 종목이 다시 켠 표시도 이 재시작 때문이다. 남겨 두면 다음 평범한 재구독이 모두를 끊는다
+    this.seqDropped = false;
+    for (const [symbol, book] of this.books) if (!book.live) this.lateAfterRestart.add(symbol);
     this.onMarketRestart();
   }
 
@@ -203,6 +209,7 @@ export class BookReplica implements SnapshotProvider {
         }
         this.apply(book, d);
       }
+      if (book.live && this.lateAfterRestart.delete(symbol)) this.onSymbolRestart(symbol);
     } catch {
       book.live = false;
     } finally {

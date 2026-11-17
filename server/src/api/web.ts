@@ -74,13 +74,15 @@ export function registerWebRoutes(app: FastifyInstance, deps: { market: Market; 
   const csp = contentSecurityPolicy(Boolean(config.GTM_CONTAINER_ID));
 
   // 웹 화면: HTML은 매번 새로 확인(no-cache)해 서버만 바꿔도 앱에 바로 반영되게 한다.
-  const isPage = (url: string) => url.startsWith('/web/') || url.startsWith('/admin/');
+  // 경로는 원문(request.url)이 아니라 라우트 패턴으로 본다. 라우터는 `/%77eb/…`도 디코딩해 /web/*로 보내므로
+  // 원문으로 판단하면 인코딩한 주소로 보안 헤더를 피할 수 있다(점검 차단과 같은 이유). HTML은 경로와 상관없이 붙인다
+  const isPage = (route: string) => route.startsWith('/web/') || route.startsWith('/admin/');
   app.addHook('onSend', async (request, reply, payload) => {
-    if (isPage(request.url)) {
+    const type = String(reply.getHeader('content-type') ?? '');
+    if (isPage(request.routeOptions.url ?? '') || type.startsWith('text/html')) {
       reply.header('Content-Security-Policy', csp);
       reply.header('X-Content-Type-Options', 'nosniff');
       reply.header('Referrer-Policy', 'no-referrer');
-      const type = String(reply.getHeader('content-type') ?? '');
       if (type.startsWith('text/html')) reply.header('Cache-Control', 'no-cache');
     }
     return payload;

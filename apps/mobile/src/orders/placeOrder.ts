@@ -8,7 +8,8 @@ import type {OrderDraft, OrderRecord, PendingOrder} from './types';
  *       ├─ 타임아웃·네트워크 오류·5xx·409 ─▶ confirming ── GET /orders/:key
  *       │                                     ├─ 있음 ─────────▶ accepted / rejected
  *       │                                     ├─ 처리 중(202) ─▶ 잠시 후 다시 조회
- *       │                                     └─ 없음(404) ────▶ 같은 키로 다시 전송
+ *       │                                     ├─ 없음(404) ────▶ 같은 키로 다시 전송
+ *       │                                     └─ 재시작으로 사라짐(410) ─▶ failed
  *       ├─ 403 OTP_REQUIRED ─▶ otp(코드 입력) ─ 맞음 ─▶ 같은 키로 다시 submitting / 취소 ─▶ failed
  *       └─ 400·422 등 확정 오류 ─────────────▶ failed
  *
@@ -34,7 +35,16 @@ export type PostResult =
   | {kind: 'error'; message: string}
   /** OTP를 켠 사용자: 서버가 멱등 키를 잡기 전에 거절했다(같은 키로 다시 보내도 된다) */
   | {kind: 'otp_required'};
-export type LookupResult = {kind: 'found'; record: OrderRecord} | {kind: 'in_progress'} | {kind: 'not_found'} | {kind: 'unknown'};
+export type LookupResult =
+  | {kind: 'found'; record: OrderRecord}
+  | {kind: 'in_progress'}
+  | {kind: 'not_found'}
+  /** 서버 재시작 전에 처리됐지만 지금은 없는 주문(410). 다시 보내도 같은 답이라 확정 실패로 끝낸다 */
+  | {kind: 'lost'}
+  | {kind: 'unknown'};
+
+/** 재시작으로 사라진 주문(서버 오류 코드와 같은 값 — 문구는 reject.ORDER_LOST_ON_RESTART) */
+export const ORDER_LOST = 'ORDER_LOST_ON_RESTART';
 
 export interface OrderDeps {
   newKey(): string;
@@ -102,6 +112,7 @@ export async function placeOrder(
       await deps.sleep(LOOKUP_BACKOFF_MS[i] ?? 2000);
       const found = await deps.lookup(key);
       if (found.kind === 'found') return finish(settle(key, attempt, found.record));
+      if (found.kind === 'lost') return finish({phase: 'failed', key, attempt, message: ORDER_LOST});
       if (found.kind === 'not_found') {
         notFound = true; // 서버에 도착하지 않았다 → 같은 키로 다시 보낸다
         break;
@@ -121,6 +132,8 @@ export interface ReconcileResult {
   confirmed: OrderRecord[];
   /** 서버에 도착하지 않은 주문. 자동으로 다시 보내지 않는다(사용자의 판단이 바뀌었을 수 있다) */
   notSent: PendingOrder[];
+  /** 서버 재시작 전에 처리됐지만 재시작으로 사라진 주문 */
+  lost: PendingOrder[];
   stillUnknown: PendingOrder[];
 }
 
@@ -129,7 +142,7 @@ export async function reconcilePending(
   list: PendingOrder[],
   deps: Pick<OrderDeps, 'lookup' | 'pending'>,
 ): Promise<ReconcileResult> {
-  const result: ReconcileResult = {confirmed: [], notSent: [], stillUnknown: []};
+  const result: ReconcileResult = {confirmed: [], notSent: [], lost: [], stillUnknown: []};
   for (const order of list) {
     const found = await deps.lookup(order.key);
     if (found.kind === 'found') {
@@ -137,6 +150,9 @@ export async function reconcilePending(
       await deps.pending.remove(order.key);
     } else if (found.kind === 'not_found') {
       result.notSent.push(order);
+      await deps.pending.remove(order.key);
+    } else if (found.kind === 'lost') {
+      result.lost.push(order);
       await deps.pending.remove(order.key);
     } else {
       result.stillUnknown.push(order);

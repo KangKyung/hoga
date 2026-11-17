@@ -120,6 +120,9 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       const key = keyResult.data;
       const body = bodyResult.data;
       if (!market.has(body.symbol)) return reply.code(404).send({ error: 'UNKNOWN_SYMBOL' });
+      // 원장 계좌가 없으면 주문할 수 없다. 개설 계좌는 메모리에만 있어 market 재시작 뒤 사라지는데,
+      // 상태 없는 액세스 토큰은 만료 전까지 유효하므로 이를 막지 않으면 예수금·보유 확인 없이 주문이 들어간다
+      if (deps.ledger && !deps.ledger.has(userId)) return reply.code(403).send({ error: 'NO_ACCOUNT' });
       // 멱등 키를 잡기 전에 확인한다 → OTP 입력 뒤 같은 키로 다시 보내도 처음 주문으로 처리된다
       const stepUp = request.headers['x-step-up'];
       if (deps.otp && !(await deps.otp.allowsOrder(userId, typeof stepUp === 'string' ? stepUp : undefined))) {
@@ -140,9 +143,14 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       if (begin.state === 'conflict') return reply.code(422).send({ error: 'IDEMPOTENCY_KEY_REUSED' });
       if (begin.state === 'pending') return reply.code(409).send({ error: 'IN_PROGRESS' });
       if (begin.state === 'done') {
+        // 주문 기록은 이 프로세스가 실행한 모든 주문을 갖고 있다(지우지 않는다). 결과는 있는데 기록이 없으면
+        // 이전 market(재시작 전)이 처리한 주문이고, 그 주문·예약은 재시작으로 사라졌다(Redis 키만 남음).
+        // 옛 결과를 200으로 돌려주면 앱은 "접수됨"으로 끝내지만 지금 엔진에는 없는 주문이 된다
+        const current = tracker.get(userId, key);
+        if (!current) return reply.code(410).send({ error: 'ORDER_LOST_ON_RESTART' });
         metrics.inc('hoga_orders_replayed_total');
         // 그 사이 체결로 상태가 바뀌었을 수 있으니 최신 기록을 돌려준다
-        return reply.header('idempotent-replayed', 'true').send(tracker.get(userId, key) ?? begin.result);
+        return reply.header('idempotent-replayed', 'true').send(current);
       }
 
       let record: OrderRecord;
@@ -204,6 +212,8 @@ export function registerOrderRoutes(app: FastifyInstance, deps: OrderRouteDeps):
       if (record) return reply.send(record);
       const entry = await store.get(OrderTracker.userKey(userId, request.params.key));
       if (entry && !entry.result) return reply.code(202).send({ state: 'IN_PROGRESS' });
+      // 결과는 있는데 기록이 없다 = 재시작 전 market이 처리하고 잃은 주문(POST 재전송과 같은 답)
+      if (entry?.result) return reply.code(410).send({ error: 'ORDER_LOST_ON_RESTART' });
       // 다른 사용자의 키는 존재 여부도 알려 주지 않는다
       return reply.code(404).send({ error: 'NOT_FOUND' });
     });

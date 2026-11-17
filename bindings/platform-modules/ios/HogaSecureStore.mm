@@ -5,12 +5,16 @@
 // - 생체 보호 값: SecAccessControl(.biometryCurrentSet) + kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
 //   읽을 때마다 Face ID/Touch ID. 생체 정보가 바뀌면 값이 무효화된다(→ 다시 로그인).
 // - Keychain 호출은 생체 인증 동안 블록되므로 전용 직렬 큐에서 실행한다.
+// - Keychain은 앱을 지워도 남는다(Android Keystore·SharedPreferences는 함께 지워짐). 그대로 두면 다시 설치했을 때
+//   리프레시 토큰으로 이전 계정에 자동 로그인된다. 그래서 설치 뒤 첫 실행(앱과 함께 지워지는 UserDefaults에 표시가
+//   없음)이면 이 앱의 항목을 모두 지운다. 같은 직렬 큐의 첫 작업이라 어떤 읽기보다 먼저 끝난다.
 #import <AppSpecs/AppSpecs.h>
 #import <LocalAuthentication/LocalAuthentication.h>
 #import <Security/Security.h>
 
 static NSString *const kService = @"com.hogaapp.secure";
 static NSString *const kBiometricService = @"com.hogaapp.secure.biometric";
+static NSString *const kInstalledFlag = @"com.hogaapp.secure.installed";
 
 @interface HogaSecureStore : NativeSecureStoreSpecBase <NativeSecureStoreSpec>
 @end
@@ -28,6 +32,18 @@ static NSString *const kBiometricService = @"com.hogaapp.secure.biometric";
 {
   if (self = [super init]) {
     _queue = dispatch_queue_create("com.hogaapp.securestore", DISPATCH_QUEUE_SERIAL);
+    dispatch_async(_queue, ^{
+      NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+      if ([defaults boolForKey:kInstalledFlag]) return;
+      for (NSString *service in @[ kService, kBiometricService ]) {
+        NSDictionary *all = @{
+          (__bridge id)kSecClass : (__bridge id)kSecClassGenericPassword,
+          (__bridge id)kSecAttrService : service,
+        };
+        SecItemDelete((__bridge CFDictionaryRef)all);
+      }
+      [defaults setBool:YES forKey:kInstalledFlag];
+    });
   }
   return self;
 }

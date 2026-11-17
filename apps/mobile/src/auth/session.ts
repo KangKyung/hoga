@@ -10,6 +10,8 @@ import {secureStore, secureStoreErrorCode} from '../native/security';
 const REFRESH_KEY = 'auth.refreshToken';
 const LOCK_KEY = 'auth.appLock';
 const LOCK_ENABLED_KEY = 'auth.lockEnabled';
+/** 갱신이 401이 아닌 이유(네트워크·시간 초과·서버 오류)로 실패했을 때 다시 시도하는 간격(ms) */
+export const REFRESH_RETRY_MS = [5_000, 15_000, 30_000];
 
 export interface User {
   id: string;
@@ -47,6 +49,8 @@ class SessionManager {
   private access: string | null = null;
   private refreshing: Promise<string | null> | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 연속으로 실패한 갱신 횟수(성공하면 0). 재시도 간격을 고른다 */
+  private refreshFailures = 0;
   /**
    * 로그아웃할 때마다 올린다. 진행 중이던 로그인·토큰 갱신의 응답이 로그아웃 뒤에 오면
    * 세대가 달라 받아들이지 않는다(그대로 받으면 로그아웃했는데 다시 로그인 상태가 된다).
@@ -184,6 +188,15 @@ class SessionManager {
       if (e instanceof HttpError && e.status === 401) {
         await this.clear();
         this.set({status: 'signedOut', message: 'session.expired'});
+        return null;
+      }
+      // 네트워크·시간 초과·서버 오류: 세션은 살아 있다. 갱신 타이머는 성공(accept)할 때만 다시 잡히므로
+      // 여기서 잡지 않으면 액세스 토큰이 만료된 채 남아 체결 알림(WS 인증)이 다음 REST 401까지 끊긴다
+      if (this.state.status === 'signedIn') {
+        const delay = REFRESH_RETRY_MS[Math.min(this.refreshFailures, REFRESH_RETRY_MS.length - 1)]!;
+        this.refreshFailures += 1;
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout(() => this.tokens.refresh(), delay);
       }
       return null;
     }
@@ -199,6 +212,7 @@ class SessionManager {
       return false;
     }
     this.access = data.accessToken;
+    this.refreshFailures = 0;
     hogaCore.setAuthToken(data.accessToken);
     clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => this.tokens.refresh(), Math.max(10, data.expiresIn - 60) * 1000);
@@ -208,6 +222,7 @@ class SessionManager {
 
   private async clear() {
     this.epoch += 1;
+    this.refreshFailures = 0;
     clearTimeout(this.refreshTimer);
     this.access = null;
     hogaCore.setAuthToken('');
